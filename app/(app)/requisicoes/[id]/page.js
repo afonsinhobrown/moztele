@@ -13,6 +13,7 @@ const ERROS = {
   comprovativo: "Indique o valor e anexe o comprovativo de transferência.",
   "sem-anexo": "Anexe pelo menos um documento do orçamento antes de submeter.",
   compra: "Indique o valor gasto e anexe pelo menos um comprovativo de compra.",
+  upload: "Não foi possível carregar o ficheiro. Verifique o tamanho (máx. 4 MB) e tente novamente.",
 };
 
 const Hidden = ({ id }) => <input type="hidden" name="id" value={id} />;

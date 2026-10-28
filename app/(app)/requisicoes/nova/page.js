@@ -21,6 +21,7 @@ export default async function Nova({ searchParams }) {
       <h1>Nova requisição</h1>
       {searchParams.erro === "1" && <p className="erro">Preencha o site, a justificação e pelo menos um item.</p>}
       {searchParams.erro === "2" && <p className="erro">Anexe pelo menos um documento (cotação, proforma ou foto) para submeter.</p>}
+      {searchParams.erro === "upload" && <p className="erro">Não foi possível carregar o ficheiro. Verifique o tamanho (máx. 4 MB) e tente novamente.</p>}
       <form action={criarRequisicao} className="card">
         <label>Site / obra</label>
         <select name="site_id" required>

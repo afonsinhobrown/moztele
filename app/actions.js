@@ -64,9 +64,14 @@ export async function criarRequisicao(formData) {
 
   const tipo = String(formData.get("tipo_anexo") || "cotacao");
   const anexos = [];
-  for (const f of formData.getAll("anexos")) {
-    const url = await guardar(f, "orcamentos");
-    if (url) anexos.push({ url, nome: f.name });
+  try {
+    for (const f of formData.getAll("anexos")) {
+      const url = await guardar(f, "orcamentos");
+      if (url) anexos.push({ url, nome: f.name });
+    }
+  } catch (e) {
+    console.error("Falha ao guardar anexos da nova requisição:", e);
+    redirect("/requisicoes/nova?erro=upload");
   }
   const estado = acao === "submeter" ? "submetido" : "rascunho";
   if (estado === "submetido" && anexos.length === 0) redirect("/requisicoes/nova?erro=2");
@@ -103,13 +108,18 @@ export async function adicionarAnexo(formData) {
   const tipo = String(formData.get("tipo_anexo") || "cotacao");
   const r = await q1("SELECT estado FROM requisicoes WHERE id=$1 AND mestre_id=$2", [id, s.id]);
   if (r && ["rascunho", "correccao_pedida"].includes(r.estado)) {
-    for (const f of formData.getAll("anexos")) {
-      const url = await guardar(f, "orcamentos");
-      if (url)
-        await q1(
-          "INSERT INTO requisicao_anexos (requisicao_id,tipo,ficheiro_url,nome_original,enviado_por) VALUES ($1,$2,$3,$4,$5)",
-          [id, tipo, url, f.name, s.id]
-        );
+    try {
+      for (const f of formData.getAll("anexos")) {
+        const url = await guardar(f, "orcamentos");
+        if (url)
+          await q1(
+            "INSERT INTO requisicao_anexos (requisicao_id,tipo,ficheiro_url,nome_original,enviado_por) VALUES ($1,$2,$3,$4,$5)",
+            [id, tipo, url, f.name, s.id]
+          );
+      }
+    } catch (e) {
+      console.error(`Falha ao guardar anexos da requisição ${id}:`, e);
+      redirect(`/requisicoes/${id}?erro=upload`);
     }
   }
   redirect(`/requisicoes/${id}`);
@@ -150,9 +160,14 @@ export async function registarCompra(formData) {
   const data = String(formData.get("data_compra") || "") || null;
   const tipo = String(formData.get("tipo") || "factura");
   const docs = [];
-  for (const f of formData.getAll("comprovativos")) {
-    const url = await guardar(f, "compras");
-    if (url) docs.push(url);
+  try {
+    for (const f of formData.getAll("comprovativos")) {
+      const url = await guardar(f, "compras");
+      if (url) docs.push(url);
+    }
+  } catch (e) {
+    console.error(`Falha ao guardar comprovativos da requisição ${id}:`, e);
+    redirect(`/requisicoes/${id}?erro=upload`);
   }
   if (!(valor >= 0) || docs.length === 0) redirect(`/requisicoes/${id}?erro=compra`);
   await tx(async (run) => {
@@ -236,7 +251,13 @@ export async function enviarDinheiro(formData) {
   const referencia = String(formData.get("referencia") || "").trim() || null;
   const f = formData.get("comprovativo");
   if (!(valor > 0) || !f || !f.size) redirect(`/requisicoes/${id}?erro=comprovativo`);
-  const url = await guardar(f, "transferencias");
+  let url;
+  try {
+    url = await guardar(f, "transferencias");
+  } catch (e) {
+    console.error(`Falha ao guardar comprovativo de pagamento da requisição ${id}:`, e);
+    redirect(`/requisicoes/${id}?erro=upload`);
+  }
   await tx(async (run) => {
     const [r] = await run("SELECT estado, mestre_id FROM requisicoes WHERE id=$1 FOR UPDATE", [id]);
     if (!r || r.estado !== "aprovado") return;
