@@ -28,11 +28,16 @@ async function notificar(run, userIds, reqId, msg) {
 export async function login(formData) {
   const tel = String(formData.get("telefone") || "").trim();
   const senha = String(formData.get("senha") || "");
-  const u = await q1(
-    `SELECT u.id, u.nome, u.senha_hash, u.activo, p.nome AS perfil
-       FROM utilizadores u JOIN perfis p ON p.id = u.perfil_id WHERE u.telefone = $1`,
-    [tel]
-  );
+  let u = null;
+  try {
+    u = await q1(
+      `SELECT u.id, u.nome, u.senha_hash, u.activo, p.nome AS perfil
+         FROM utilizadores u JOIN perfis p ON p.id = u.perfil_id WHERE u.telefone = $1`,
+      [tel]
+    );
+  } catch (e) {
+    redirect("/login?erro=1");
+  }
   if (!u || !u.activo || !(await bcrypt.compare(senha, u.senha_hash))) redirect("/login?erro=1");
   await criarSessao(u);
   redirect("/requisicoes");
