@@ -2,6 +2,7 @@ import Link from "next/link";
 import { exigir } from "@/lib/auth";
 import { q } from "@/lib/db";
 import { Badge, ESTADOS, MT, dt } from "@/lib/ui";
+import Btn from "@/components/Btn";
 
 const URGENCIAS = { baixa: "Baixa", normal: "Normal", alta: "Alta", urgente: "Urgente" };
 
