@@ -35,3 +35,8 @@ button.link{border:0;background:none;color:inherit;padding:0;text-decoration:und
 .b-submetido,.b-correccao_pedida{background:#fff0cc;color:#8a5a00}.b-dinheiro_enviado,.b-compra_comprovada{background:#dbeafe;color:#1d4ed8}
 .ficheiro{margin-right:10px}.checks{display:grid;gap:4px}.checks label{font-weight:400}
 .login{min-height:100vh;display:grid;place-items:center;padding:16px}.login .card{width:100%;max-width:340px}
+.barra-linha{display:flex;align-items:center;gap:10px;margin:6px 0}
+.barra-mes{width:80px;font-size:13px;color:#667}
+.barra{flex:1;background:#eef2f7;border-radius:6px;height:18px;overflow:hidden}
+.barra-fill{display:block;height:100%;background:#0f3d6e;border-radius:6px}
+.barra-valor{width:120px;text-align:right;font-size:13px}

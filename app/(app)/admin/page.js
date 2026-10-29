@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { exigir } from "@/lib/auth";
 import { q } from "@/lib/db";
 import { criarUtilizador, criarSite, alternarUtilizador } from "@/app/actions";
@@ -47,7 +48,11 @@ export default async function Admin({ searchParams }) {
             {users.map((u) => (
               <tr key={u.id}>
                 <td>{u.nome}</td><td>{u.telefone}</td><td>{u.perfil}</td><td>{u.activo ? "sim" : "não"}</td>
-                <td><form action={alternarUtilizador}><input type="hidden" name="id" value={u.id} /><button className="link">{u.activo ? "Desactivar" : "Activar"}</button></form></td>
+                <td>
+                  <Link href={`/admin/utilizadores/${u.id}`} className="link">Editar</Link>
+                  {" · "}
+                  <form action={alternarUtilizador} style={{ display: "inline" }}><input type="hidden" name="id" value={u.id} /><button className="link">{u.activo ? "Desactivar" : "Activar"}</button></form>
+                </td>
               </tr>
             ))}
           </tbody>

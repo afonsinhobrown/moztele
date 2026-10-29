@@ -321,6 +321,39 @@ export async function criarUtilizador(formData) {
   redirect(ok ? "/admin" : "/admin?erro=dup");
 }
 
+export async function actualizarUtilizador(formData) {
+  await exigir("admin");
+  const id = Number(formData.get("id"));
+  const nome = String(formData.get("nome") || "").trim();
+  const telefone = String(formData.get("telefone") || "").trim();
+  const email = String(formData.get("email") || "").trim() || null;
+  const perfil = String(formData.get("perfil"));
+  const area = formData.get("area_id") ? Number(formData.get("area_id")) : null;
+  const sites = formData.getAll("sites").map(Number);
+  const activo = formData.get("activo") === "on";
+  const senha = String(formData.get("senha") || "");
+  if (!id || !nome || !telefone) redirect(`/admin/utilizadores/${id}?erro=dados`);
+  if (senha && senha.length < 6) redirect(`/admin/utilizadores/${id}?erro=senha`);
+  try {
+    const hash = senha ? await bcrypt.hash(senha, 10) : null;
+    await tx(async (run) => {
+      await run(
+        `UPDATE utilizadores
+            SET nome=$1, telefone=$2, email=$3, perfil_id=(SELECT id FROM perfis WHERE nome=$4),
+                area_id=$5, activo=$6, senha_hash=COALESCE($7, senha_hash)
+          WHERE id=$8`,
+        [nome, telefone, email, perfil, area, activo, hash, id]
+      );
+      await run("DELETE FROM mestre_sites WHERE mestre_id=$1", [id]);
+      for (const sid of sites)
+        await run("INSERT INTO mestre_sites (mestre_id, site_id) VALUES ($1,$2)", [id, sid]);
+    });
+  } catch {
+    redirect(`/admin/utilizadores/${id}?erro=dup`);
+  }
+  redirect("/admin");
+}
+
 export async function criarSite(formData) {
   await exigir("admin");
   const nome = String(formData.get("nome") || "").trim();
