@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { exigir } from "@/lib/auth";
-import { q } from "@/lib/db";
 import { MT } from "@/lib/ui";
+import { dadosRelatorioFinanceiro } from "@/lib/relatorios";
 import Btn from "@/components/Btn";
 
 const MESES = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
@@ -13,73 +13,22 @@ const nomeMes = (ym) => {
 export default async function RelatorioFinanceiro({ searchParams }) {
   await exigir("admin", "financeiro");
   const { de, ate } = searchParams;
+  const { itens, mestres, meses, totalEnviado, totalGasto } = await dadosRelatorioFinanceiro(searchParams);
 
-  const periodo = (col) => {
-    const params = [];
-    const where = [];
-    if (de) { params.push(de); where.push(`${col} >= $${params.length}::date`); }
-    if (ate) { params.push(ate); where.push(`${col} < ($${params.length}::date + interval '1 day')`); }
-    return { params, where: where.length ? "WHERE " + where.join(" AND ") : "" };
-  };
-  const reqP = periodo("r.criado_em");
-  const gastoP = periodo("c.data_compra");
-  const finP = periodo("p.enviado_em");
-
-  const [itens, gastoMestres, finMestres, meses, totalGasto, totalFin] = await Promise.all([
-    q(
-      `SELECT i.descricao, COALESCE(cat.nome,'Sem categoria') AS categoria,
-              sum(i.quantidade) AS quantidade, sum(i.subtotal) AS total
-         FROM requisicao_itens i
-         JOIN requisicoes r ON r.id=i.requisicao_id
-         LEFT JOIN categorias cat ON cat.id=i.categoria_id
-         ${reqP.where}
-         GROUP BY i.descricao, cat.nome
-         ORDER BY total DESC LIMIT 25`,
-      reqP.params
-    ),
-    q(
-      `SELECT r.mestre_id, u.nome, sum(c.valor_gasto) AS total, count(*)::int AS compras
-         FROM compras c JOIN requisicoes r ON r.id=c.requisicao_id JOIN utilizadores u ON u.id=r.mestre_id
-         ${gastoP.where}
-         GROUP BY r.mestre_id, u.nome
-         ORDER BY total DESC LIMIT 25`,
-      gastoP.params
-    ),
-    q(
-      `SELECT r.mestre_id, u.nome, sum(p.valor) AS total, count(*)::int AS envios
-         FROM pagamentos p JOIN requisicoes r ON r.id=p.requisicao_id JOIN utilizadores u ON u.id=r.mestre_id
-         ${finP.where}
-         GROUP BY r.mestre_id, u.nome
-         ORDER BY total DESC LIMIT 25`,
-      finP.params
-    ),
-    q(
-      `SELECT to_char(p.enviado_em,'YYYY-MM') AS mes, sum(p.valor) AS total, count(*)::int AS envios
-         FROM pagamentos p
-         ${finP.where}
-         GROUP BY mes ORDER BY mes`,
-      finP.params
-    ),
-    q(`SELECT COALESCE(sum(c.valor_gasto),0) AS total FROM compras c ${gastoP.where}`, gastoP.params),
-    q(`SELECT COALESCE(sum(p.valor),0) AS total FROM pagamentos p ${finP.where}`, finP.params),
-  ]);
-
-  const porMestre = {};
-  for (const x of finMestres) porMestre[x.mestre_id] = { nome: x.nome, financiado: Number(x.total), gasto: 0 };
-  for (const x of gastoMestres) {
-    porMestre[x.mestre_id] = porMestre[x.mestre_id] || { nome: x.nome, financiado: 0, gasto: 0 };
-    porMestre[x.mestre_id].gasto = Number(x.total);
-  }
-  const mestres = Object.values(porMestre).sort((a, b) => b.gasto - a.gasto);
+  const qs = new URLSearchParams();
+  if (de) qs.set("de", de);
+  if (ate) qs.set("ate", ate);
+  const pdf = `/api/relatorios/financeiro/pdf${qs.toString() ? `?${qs}` : ""}`;
   const maxMes = Math.max(1, ...meses.map((m) => Number(m.total)));
-  const totalEnviado = Number(totalFin[0].total);
-  const totalGastoV = Number(totalGasto[0].total);
 
   return (
     <>
       <div className="linha">
         <h1>Relatório financeiro</h1>
-        <Link href="/relatorios/requisicoes" className="btn sec">Relatório de requisições</Link>
+        <div className="acoes">
+          <a href={pdf} className="btn pri" target="_blank" rel="noreferrer">Gerar PDF</a>
+          <Link href="/relatorios/requisicoes" className="btn sec">Relatório de requisições</Link>
+        </div>
       </div>
 
       <form method="get" className="card inline">
@@ -90,8 +39,8 @@ export default async function RelatorioFinanceiro({ searchParams }) {
       </form>
 
       <div className="card">
-        <b>Financiado (enviado):</b> {MT(totalEnviado)} · <b>Gasto em compras:</b> {MT(totalGastoV)} ·{" "}
-        <b>Saldo:</b> {MT(totalEnviado - totalGastoV)}
+        <b>Financiado (enviado):</b> {MT(totalEnviado)} · <b>Gasto em compras:</b> {MT(totalGasto)} ·{" "}
+        <b>Saldo:</b> {MT(totalEnviado - totalGasto)}
       </div>
 
       <h2>Itens que mais consumiram dinheiro</h2>

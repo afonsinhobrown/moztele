@@ -1,49 +1,30 @@
 import Link from "next/link";
 import { exigir } from "@/lib/auth";
-import { q } from "@/lib/db";
 import { Badge, ESTADOS, MT, dt } from "@/lib/ui";
+import { dadosRelatorioRequisicoes, URGENCIAS } from "@/lib/relatorios";
 import Btn from "@/components/Btn";
 
-const URGENCIAS = { baixa: "Baixa", normal: "Normal", alta: "Alta", urgente: "Urgente" };
+const queryString = (obj) => {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(obj)) if (v) qs.set(k, Array.isArray(v) ? v[0] : v);
+  const s = qs.toString();
+  return s ? `?${s}` : "";
+};
 
 export default async function RelatorioRequisicoes({ searchParams }) {
   const s = await exigir("admin", "financeiro", "aprovador");
-  const { estado, de, ate, mestre, site, urgencia, texto } = searchParams;
-
-  const params = [];
-  const where = [];
-  if (s.perfil === "mestre") { params.push(s.id); where.push(`r.mestre_id=$${params.length}`); }
-  if (estado && ESTADOS[estado]) { params.push(estado); where.push(`r.estado=$${params.length}`); }
-  if (urgencia && URGENCIAS[urgencia]) { params.push(urgencia); where.push(`r.urgencia=$${params.length}`); }
-  if (de) { params.push(de); where.push(`r.criado_em >= $${params.length}::date`); }
-  if (ate) { params.push(ate); where.push(`r.criado_em < ($${params.length}::date + interval '1 day')`); }
-  if (mestre) { params.push(`%${mestre}%`); where.push(`u.nome ILIKE $${params.length}`); }
-  if (site) { params.push(Number(site)); where.push(`r.site_id=$${params.length}`); }
-  if (texto) { params.push(`%${texto}%`); where.push(`(r.codigo ILIKE $${params.length} OR r.justificacao ILIKE $${params.length})`); }
-  const filtro = where.length ? "WHERE " + where.join(" AND ") : "";
-
-  const [rows, resumo, sites, mestres] = await Promise.all([
-    q(
-      `SELECT r.id, r.codigo, r.valor_estimado, r.urgencia, r.estado, r.criado_em, u.nome AS mestre, st.nome AS site
-         FROM requisicoes r JOIN utilizadores u ON u.id=r.mestre_id JOIN sites st ON st.id=r.site_id
-         ${filtro} ORDER BY r.criado_em DESC LIMIT 500`,
-      params
-    ),
-    q(
-      `SELECT count(*)::int AS n, COALESCE(sum(r.valor_estimado),0) AS total
-         FROM requisicoes r JOIN utilizadores u ON u.id=r.mestre_id JOIN sites st ON st.id=r.site_id ${filtro}`,
-      params
-    ),
-    q("SELECT id, nome FROM sites ORDER BY nome"),
-    q("SELECT u.id, u.nome FROM utilizadores u JOIN perfis p ON p.id=u.perfil_id WHERE p.nome='mestre' ORDER BY u.nome"),
-  ]);
-  const { n, total } = resumo[0];
+  const { rows, n, total, sites, filtros } = await dadosRelatorioRequisicoes(searchParams, s.perfil);
+  const { estado, de, ate, mestre, site, urgencia, texto } = filtros;
+  const pdf = `/api/relatorios/requisicoes/pdf${queryString(filtros)}`;
 
   return (
     <>
       <div className="linha">
         <h1>Relatório de requisições</h1>
-        <Link href="/relatorios/financeiro" className="btn sec">Relatório financeiro</Link>
+        <div className="acoes">
+          <a href={pdf} className="btn pri" target="_blank" rel="noreferrer">Gerar PDF</a>
+          <Link href="/relatorios/financeiro" className="btn sec">Relatório financeiro</Link>
+        </div>
       </div>
 
       <form method="get" className="card">
