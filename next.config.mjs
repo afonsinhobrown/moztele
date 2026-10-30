@@ -5,8 +5,8 @@ const nextConfig = {
     serverActions: {
       bodySizeLimit: "4mb",
     },
-    // Compila no processo principal: menos memória e funciona em ambientes
-    // onde não é possível criar processos filhos.
+    // Em máquinas com pouca memória, compilar num único processo evita
+    // duplicar o heap por cada worker. (Na Vercel o comportamento é o mesmo.)
     webpackBuildWorker: false,
   },
   async headers() {

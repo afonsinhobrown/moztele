@@ -6,7 +6,9 @@ import { q, q1, tx } from "@/lib/db";
 import { criarSessao, terminarSessao, exigir, sessaoActiva } from "@/lib/auth";
 import { guardar, apagarFicheiroGuardado } from "@/lib/upload";
 import { ErroFicheiro, FINALIDADES_FINANCEIRAS } from "@/lib/ficheiros";
-import { arred, quantidadeValida, valorPositivo, valorValido } from "@/lib/num";
+import { arred, num, quantidadeValida, valorPositivo, valorValido } from "@/lib/num";
+import { distribuirCredito } from "@/lib/creditos";
+import { TIPOS_MOVIMENTO, calcularMovimento } from "@/lib/stock";
 import { errosSenha } from "@/lib/senha";
 import { normalizarTelefone, telefoneValido } from "@/lib/telefone";
 import { demasiadasTentativas, registarTentativa } from "@/lib/limite";
@@ -107,6 +109,76 @@ function lerItens(formData) {
     });
   }
   return { itens, total: arred(itens.reduce((a, i) => a + i.quantidade * i.preco, 0)) };
+}
+
+// Só deixa gerir stock em sites a que o utilizador tem acesso.
+async function sitePermitido(s, siteId) {
+  if (!siteId) return null;
+  if (["admin", "financeiro"].includes(s.perfil))
+    return q1("SELECT id FROM sites WHERE id=$1 AND activo", [siteId]);
+  if (s.perfil === "mestre")
+    return q1(
+      `SELECT st.id FROM sites st
+        WHERE st.id=$1 AND st.activo
+          AND (EXISTS (SELECT 1 FROM mestre_sites ms WHERE ms.mestre_id=$2 AND ms.site_id=st.id)
+               OR NOT EXISTS (SELECT 1 FROM mestre_sites WHERE mestre_id=$2))`,
+      [siteId, s.id]
+    );
+  return null;
+}
+
+// Aplica o saldo abatido disponível (mesmo mestre + mesmo site) a uma requisição.
+async function aplicarCreditos(run, { requisicaoId, mestreId, siteId, valorEstimado, utilizadorId }) {
+  const [ja] = await run(
+    "SELECT COALESCE(sum(valor),0) AS v FROM creditos_aplicacoes WHERE requisicao_id=$1",
+    [requisicaoId]
+  );
+  const necessario = arred(Number(valorEstimado) - Number(ja.v));
+  if (necessario <= 0) return 0;
+
+  const disponiveis = await run(
+    `SELECT id, (valor - valor_usado) AS disponivel
+       FROM creditos_abatimento
+      WHERE mestre_id=$1 AND site_id=$2 AND valor > valor_usado
+      ORDER BY criado_em, id
+      FOR UPDATE`,
+    [mestreId, siteId]
+  );
+  const { aplicacoes } = distribuirCredito(disponiveis, necessario);
+  for (const a of aplicacoes) {
+    await run(
+      "INSERT INTO creditos_aplicacoes (credito_id, requisicao_id, valor, aplicado_por) VALUES ($1,$2,$3,$4)",
+      [a.id, requisicaoId, a.valor, utilizadorId]
+    );
+    await run("UPDATE creditos_abatimento SET valor_usado = valor_usado + $1 WHERE id=$2", [
+      a.valor,
+      a.id,
+    ]);
+  }
+  return aplicacoes.reduce((t, a) => t + a.valor, 0);
+}
+
+// Devolve o crédito aplicado quando a requisição é cancelada.
+async function libertarCreditos(run, requisicaoId) {
+  const apps = await run(
+    "SELECT id, credito_id, valor FROM creditos_aplicacoes WHERE requisicao_id=$1",
+    [requisicaoId]
+  );
+  for (const a of apps) {
+    await run(
+      "UPDATE creditos_abatimento SET valor_usado = GREATEST(0, valor_usado - $1) WHERE id=$2",
+      [a.valor, a.credito_id]
+    );
+    await run("DELETE FROM creditos_aplicacoes WHERE id=$1", [a.id]);
+  }
+}
+
+async function somaCreditos(run, requisicaoId) {
+  const [c] = await run(
+    "SELECT COALESCE(sum(valor),0) AS v FROM creditos_aplicacoes WHERE requisicao_id=$1",
+    [requisicaoId]
+  );
+  return Number(c.v);
 }
 
 /* ---------- Sessão ---------- */
@@ -245,8 +317,16 @@ export async function criarRequisicao(formData) {
           [r.id, tipo, f.url, f.nome, s.id]
         );
       }
-      if (estado === "submetido")
+      if (estado === "submetido") {
+        await aplicarCreditos(run, {
+          requisicaoId: r.id,
+          mestreId: s.id,
+          siteId: site_id,
+          valorEstimado: total,
+          utilizadorId: s.id,
+        });
         await notificar(run, await idsPerfil(run, "aprovador"), r.id, "Nova requisição para aprovar");
+      }
       return r.id;
     }, s.id);
   } catch (e) {
@@ -347,13 +427,21 @@ export async function submeter(formData) {
   const id = Number(formData.get("id"));
   const resultado = await tx(async (run) => {
     const [r] = await run(
-      `SELECT estado, (SELECT count(*) FROM requisicao_anexos WHERE requisicao_id=$1)::int AS n
+      `SELECT estado, site_id, valor_estimado,
+              (SELECT count(*) FROM requisicao_anexos WHERE requisicao_id=$1)::int AS n
          FROM requisicoes WHERE id=$1 AND mestre_id=$2 FOR UPDATE`,
       [id, s.id]
     );
     if (!r || !["rascunho", "correccao_pedida"].includes(r.estado)) return "estado";
     if (r.n === 0) return "sem-anexo";
     await run("UPDATE requisicoes SET estado='submetido' WHERE id=$1", [id]);
+    await aplicarCreditos(run, {
+      requisicaoId: id,
+      mestreId: s.id,
+      siteId: r.site_id,
+      valorEstimado: r.valor_estimado,
+      utilizadorId: s.id,
+    });
     await notificar(run, await idsPerfil(run, "aprovador"), id, "Requisição submetida para aprovação");
     return "ok";
   }, s.id);
@@ -369,6 +457,7 @@ export async function cancelar(formData) {
       [id, s.id]
     );
     if (!r || !["rascunho", "submetido", "correccao_pedida"].includes(r.estado)) return;
+    await libertarCreditos(run, id);
     await run("UPDATE requisicoes SET estado='cancelado' WHERE id=$1", [id]);
   }, s.id);
   redirect(`/requisicoes/${id}`);
@@ -503,6 +592,7 @@ export async function decidir(formData) {
       if (!novo) return "ok";
 
       await run("UPDATE requisicoes SET estado=$2 WHERE id=$1", [id, novo]);
+      if (novo === "reprovado") await libertarCreditos(run, id);
       const msg = {
         aprovado: "A sua requisição foi aprovada. Aguarde o envio do dinheiro.",
         reprovado: `A sua requisição foi reprovada: ${motivo}`,
@@ -589,10 +679,11 @@ export async function fecharRequisicao(formData) {
 
   const resumo = await q1(
     `SELECT COALESCE((SELECT sum(valor) FROM pagamentos WHERE requisicao_id=$1),0) AS enviado,
+            COALESCE((SELECT sum(valor) FROM creditos_aplicacoes WHERE requisicao_id=$1),0) AS credito,
             COALESCE((SELECT sum(valor_gasto) FROM compras WHERE requisicao_id=$1),0) AS gasto`,
     [id]
   );
-  const saldo = arred(Number(resumo.enviado) - Number(resumo.gasto));
+  const saldo = arred(Number(resumo.enviado) + Number(resumo.credito) - Number(resumo.gasto));
 
   let ficheiro = null;
   if (saldo > 0 && destino === "devolvido") {
@@ -608,11 +699,12 @@ export async function fecharRequisicao(formData) {
   let resultado = "ok";
   try {
     resultado = await tx(async (run) => {
-      const [r] = await run("SELECT estado, mestre_id FROM requisicoes WHERE id=$1 FOR UPDATE", [id]);
+      const [r] = await run("SELECT estado, mestre_id, site_id FROM requisicoes WHERE id=$1 FOR UPDATE", [id]);
       if (!r || r.estado !== "compra_comprovada") return "estado";
       const [e] = await run("SELECT COALESCE(sum(valor),0) AS v FROM pagamentos WHERE requisicao_id=$1", [id]);
+      const credito = await somaCreditos(run, id);
       const [g] = await run("SELECT COALESCE(sum(valor_gasto),0) AS v FROM compras WHERE requisicao_id=$1", [id]);
-      const s2 = arred(Number(e.v) - Number(g.v));
+      const s2 = arred(Number(e.v) + credito - Number(g.v));
       const estado =
         s2 === 0
           ? "sem_saldo"
@@ -627,13 +719,24 @@ export async function fecharRequisicao(formData) {
         `INSERT INTO acertos
            (requisicao_id, valor_enviado, valor_gasto, estado, fechado_por, fechado_em, comprovativo_url, comprovativo_hash)
          VALUES ($1,$2,$3,$4,$5,now(),$6,$7)`,
-        [id, e.v, g.v, estado, s.id, ficheiro?.url || null, ficheiro?.hash || null]
+        [id, arred(Number(e.v) + credito), g.v, estado, s.id, ficheiro?.url || null, ficheiro?.hash || null]
       );
       if (ficheiro) {
         await registarFicheiro(run, ficheiro, { requisicaoId: id, finalidade: "acerto", utilizadorId: s.id });
       }
       await run("UPDATE requisicoes SET estado='fechado' WHERE id=$1", [id]);
-      await notificar(run, [r.mestre_id], id, "Requisição fechada.");
+      // O saldo abatido fica como crédito para a próxima requisição do mesmo mestre/site.
+      if (estado === "saldo_abatido") {
+        await run(
+          `INSERT INTO creditos_abatimento (requisicao_origem_id, mestre_id, site_id, valor)
+           VALUES ($1,$2,$3,$4)
+           ON CONFLICT (requisicao_origem_id) DO NOTHING`,
+          [id, r.mestre_id, r.site_id, s2]
+        );
+        await notificar(run, [r.mestre_id], id, `Requisição fechada. ${s2} MZN ficam abatidos à próxima requisição.`);
+      } else {
+        await notificar(run, [r.mestre_id], id, "Requisição fechada.");
+      }
       return estado;
     }, s.id);
   } catch (e) {
@@ -849,4 +952,255 @@ export async function marcarNotificacoesLidas() {
   const s = await exigir();
   await q1("UPDATE notificacoes SET lida = TRUE WHERE utilizador_id=$1 AND NOT lida", [s.id]);
   redirect("/notificacoes");
+}
+
+/* ---------- Inventário ---------- */
+
+export async function criarItemStock(formData) {
+  const s = await exigir();
+  if (!["mestre", "financeiro", "admin"].includes(s.perfil)) redirect("/inventario?erro=permissao");
+  const siteId = Number(formData.get("site_id"));
+  const site = await sitePermitido(s, siteId);
+  if (!site) redirect("/inventario?erro=site");
+
+  const descricao = String(formData.get("descricao") || "").trim().slice(0, 255);
+  const unidade = String(formData.get("unidade") || "un").trim().slice(0, 20) || "un";
+  const quantidade = valorValido(formData.get("quantidade")) ?? 0;
+  const minima = valorValido(formData.get("quantidade_minima")) ?? 0;
+  const categoria = formData.get("categoria_id") ? Number(formData.get("categoria_id")) : null;
+  if (!descricao) redirect("/inventario?erro=dados");
+
+  try {
+    await tx(async (run) => {
+      const [item] = await run(
+        `INSERT INTO inventario (site_id, categoria_id, descricao, unidade, quantidade, quantidade_minima)
+         VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+        [siteId, categoria, descricao, unidade, quantidade, minima]
+      );
+      if (quantidade > 0)
+        await run(
+          `INSERT INTO movimentos_stock
+             (inventario_id, tipo, quantidade, saldo_anterior, saldo_apos, motivo, utilizador_id)
+           VALUES ($1,'entrada',$2,0,$2,'Stock inicial',$3)`,
+          [item.id, quantidade, s.id]
+        );
+    }, s.id);
+  } catch (e) {
+    if (e?.code === "23505") redirect("/inventario?erro=duplicado");
+    erroInesperado("Criar item de stock", e);
+    redirect("/inventario?erro=upload");
+  }
+  redirect("/inventario?ok=item");
+}
+
+export async function registarMovimentoStock(formData) {
+  const s = await exigir();
+  if (!["mestre", "financeiro", "admin"].includes(s.perfil)) redirect("/inventario?erro=permissao");
+
+  const itemId = Number(formData.get("item_id"));
+  const tipo = String(formData.get("tipo"));
+  const quantidade = num(formData.get("quantidade"));
+  const motivo = String(formData.get("motivo") || "").trim().slice(0, 500) || null;
+  if (!itemId || !TIPOS_MOVIMENTO.includes(tipo) || !Number.isFinite(quantidade))
+    redirect("/inventario?erro=dados");
+
+  const item = await q1("SELECT id, site_id, descricao FROM inventario WHERE id=$1", [itemId]);
+  if (!item) redirect("/inventario?erro=item");
+  const site = await sitePermitido(s, item.site_id);
+  if (!site) redirect("/inventario?erro=permissao");
+
+  let resultado = "ok";
+  try {
+    resultado = await tx(async (run) => {
+      const [atual] = await run("SELECT * FROM inventario WHERE id=$1 FOR UPDATE", [itemId]);
+      if (!atual) return "item";
+      const calc = calcularMovimento({ tipo, quantidade, saldoAtual: atual.quantidade });
+      if (calc.erro) return calc.erro;
+      await run("UPDATE inventario SET quantidade=$1, actualizado_em=now() WHERE id=$2", [
+        calc.saldoApos,
+        itemId,
+      ]);
+      await run(
+        `INSERT INTO movimentos_stock
+           (inventario_id, tipo, quantidade, saldo_anterior, saldo_apos, motivo, utilizador_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [itemId, tipo, tipo === "ajuste" ? quantidade : calc.delta ? Math.abs(calc.delta) : quantidade, calc.saldoAnterior, calc.saldoApos, motivo, s.id]
+      );
+      return "ok";
+    }, s.id);
+  } catch (e) {
+    erroInesperado("Movimento de stock", e, { item: itemId });
+    redirect("/inventario?erro=upload");
+  }
+  redirect(`/inventario?${resultado === "ok" ? "ok=movimento" : `erro=${resultado}`}`);
+}
+
+export async function entradaStockRequisicao(formData) {
+  const s = await exigir("mestre");
+  const id = Number(formData.get("id"));
+  const r = await q1("SELECT id, codigo, site_id, mestre_id, estado FROM requisicoes WHERE id=$1 AND mestre_id=$2", [id, s.id]);
+  if (!r) redirect(`/requisicoes/${id}`);
+  if (!["compra_comprovada", "fechado"].includes(r.estado)) redirect(`/requisicoes/${id}?erro=estado`);
+
+  const ja = await q1("SELECT 1 FROM movimentos_stock WHERE requisicao_id=$1 AND tipo='entrada' LIMIT 1", [id]);
+  if (ja) redirect(`/requisicoes/${id}?erro=stock`);
+
+  const itens = await q("SELECT descricao, unidade, categoria_id, quantidade FROM requisicao_itens WHERE requisicao_id=$1 ORDER BY id", [id]);
+  if (!itens.length) redirect(`/requisicoes/${id}?erro=stock`);
+
+  // Junta linhas repetidas (mesma descrição) para não duplicar movimentos.
+  const mapa = new Map();
+  for (const i of itens) {
+    const chave = String(i.descricao).trim().toLowerCase();
+    const atual = mapa.get(chave) || {
+      descricao: String(i.descricao).trim().slice(0, 255),
+      unidade: i.unidade,
+      categoria_id: i.categoria_id,
+      quantidade: 0,
+    };
+    atual.quantidade = arred(atual.quantidade + Number(i.quantidade));
+    mapa.set(chave, atual);
+  }
+
+  try {
+    await tx(async (run) => {
+      for (const item of mapa.values()) {
+        const [existente] = await run(
+          "SELECT id, quantidade FROM inventario WHERE site_id=$1 AND lower(descricao)=lower($2) FOR UPDATE",
+          [r.site_id, item.descricao]
+        );
+        let inventarioId;
+        let anterior;
+        if (existente) {
+          inventarioId = existente.id;
+          anterior = Number(existente.quantidade);
+          await run("UPDATE inventario SET quantidade=$1, actualizado_em=now() WHERE id=$2", [
+            arred(anterior + item.quantidade),
+            inventarioId,
+          ]);
+        } else {
+          const [novo] = await run(
+            `INSERT INTO inventario (site_id, categoria_id, descricao, unidade, quantidade, quantidade_minima)
+             VALUES ($1,$2,$3,$4,$5,0) RETURNING id`,
+            [r.site_id, item.categoria_id, item.descricao, item.unidade, item.quantidade]
+          );
+          inventarioId = novo.id;
+          anterior = 0;
+        }
+        await run(
+          `INSERT INTO movimentos_stock
+             (inventario_id, tipo, quantidade, saldo_anterior, saldo_apos, motivo, requisicao_id, utilizador_id)
+           VALUES ($1,'entrada',$2,$3,$4,$5,$6,$7)`,
+          [
+            inventarioId,
+            item.quantidade,
+            anterior,
+            arred(anterior + item.quantidade),
+            `Compra da requisição ${r.codigo}`,
+            id,
+            s.id,
+          ]
+        );
+      }
+    }, s.id);
+  } catch (e) {
+    if (e?.code === "23505") redirect(`/requisicoes/${id}?erro=stock`);
+    erroInesperado("Entrada no stock a partir da requisição", e, { requisicao: id });
+    redirect(`/requisicoes/${id}?erro=stock`);
+  }
+  redirect(`/requisicoes/${id}?ok=stock`);
+}
+
+/* ---------- Modelos e favoritos ---------- */
+
+export async function guardarModelo(formData) {
+  const s = await exigir("mestre");
+  const id = Number(formData.get("id"));
+  const nome = String(formData.get("nome") || "").trim().slice(0, 120);
+  const partilhado = formData.get("partilhado") === "on";
+  if (!nome) redirect(`/requisicoes/${id}?erro=modelo`);
+
+  const r = await q1("SELECT id, justificacao FROM requisicoes WHERE id=$1 AND mestre_id=$2", [id, s.id]);
+  if (!r) redirect(`/requisicoes/${id}`);
+  const itens = await q(
+    `SELECT descricao, quantidade, unidade, preco_unitario, categoria_id
+       FROM requisicao_itens WHERE requisicao_id=$1 ORDER BY id`,
+    [id]
+  );
+  if (!itens.length) redirect(`/requisicoes/${id}?erro=modelo`);
+
+  await q1(
+    `INSERT INTO modelos_requisicao (mestre_id, nome, justificacao, itens, partilhado)
+     VALUES ($1,$2,$3,$4,$5)`,
+    [s.id, nome, r.justificacao, JSON.stringify(itens), partilhado]
+  );
+  redirect("/modelos?ok=modelo");
+}
+
+export async function apagarModelo(formData) {
+  const s = await exigir("mestre");
+  const id = Number(formData.get("id"));
+  await q1("DELETE FROM modelos_requisicao WHERE id=$1 AND mestre_id=$2", [id, s.id]);
+  redirect("/modelos?ok=apagado");
+}
+
+export async function guardarFavorito(formData) {
+  const s = await exigir("mestre");
+  const itemId = Number(formData.get("item_id"));
+  const item = await q1(
+    `SELECT i.*, r.id AS requisicao_id
+       FROM requisicao_itens i JOIN requisicoes r ON r.id=i.requisicao_id
+      WHERE i.id=$1 AND r.mestre_id=$2`,
+    [itemId, s.id]
+  );
+  if (!item) redirect("/requisicoes");
+  await q1(
+    `INSERT INTO itens_favoritos (mestre_id, descricao, unidade, preco_unitario, categoria_id)
+     VALUES ($1,$2,$3,$4,$5)
+     ON CONFLICT (mestre_id, lower(descricao)) DO UPDATE
+       SET unidade = EXCLUDED.unidade,
+           preco_unitario = EXCLUDED.preco_unitario,
+           categoria_id = EXCLUDED.categoria_id`,
+    [s.id, item.descricao, item.unidade, item.preco_unitario, item.categoria_id]
+  );
+  redirect(`/requisicoes/${item.requisicao_id}?ok=favorito`);
+}
+
+export async function apagarFavorito(formData) {
+  const s = await exigir("mestre");
+  const id = Number(formData.get("id"));
+  await q1("DELETE FROM itens_favoritos WHERE id=$1 AND mestre_id=$2", [id, s.id]);
+  redirect("/modelos?ok=apagado");
+}
+
+/* ---------- Saldo abatido ---------- */
+
+export async function confirmarCobertura(formData) {
+  const s = await exigir("financeiro");
+  const id = Number(formData.get("id"));
+  let resultado = "ok";
+  try {
+    resultado = await tx(async (run) => {
+      const [r] = await run(
+        "SELECT estado, mestre_id, valor_estimado FROM requisicoes WHERE id=$1 FOR UPDATE",
+        [id]
+      );
+      if (!r || r.estado !== "aprovado") return "estado";
+      const credito = await somaCreditos(run, id);
+      const [p] = await run("SELECT COALESCE(sum(valor),0) AS v FROM pagamentos WHERE requisicao_id=$1", [id]);
+      if (arred(credito + Number(p.v)) < Number(r.valor_estimado)) return "credito";
+      await run("UPDATE requisicoes SET estado='dinheiro_enviado' WHERE id=$1", [id]);
+      await notificar(
+        run,
+        [r.mestre_id],
+        id,
+        "Requisição coberta pelo saldo abatido. Faça a compra e anexe o comprovativo."
+      );
+      return "ok";
+    }, s.id);
+  } catch (e) {
+    erroInesperado("Confirmar cobertura por crédito", e, { requisicao: id });
+    redirect(`/requisicoes/${id}?erro=upload`);
+  }
+  redirect(`/requisicoes/${id}${resultado === "ok" ? "?ok=credito" : `?erro=${resultado}`}`);
 }

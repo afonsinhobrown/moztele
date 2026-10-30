@@ -54,6 +54,34 @@ O sistema existe para uma coisa: **o dinheiro tem prova em cada passo** — e qu
   proactivos é preciso um template aprovado na Meta.
 - Requisições paradas: `npm run alertas` (agende na Vercel com um Cron Job, por exemplo uma vez por dia).
 
+## Inventário
+
+- Cada site tem o seu inventário (`/inventario`): material, unidade, quantidade e mínimo.
+- Entradas, saídas e ajustes de contagem ficam registados em `movimentos_stock`, com saldo antes/depois, motivo,
+  autor e (quando aplicável) a requisição de origem.
+- As saídas nunca deixam o stock negativo; os itens abaixo do mínimo ficam destacados e podem ser filtrados.
+- Depois da compra, o mestre pode usar **Dar entrada no stock** na requisição: as quantidades pedidas entram no
+  inventário do site e ficam ligadas a essa requisição (uma única vez).
+- Nenhum movimento é apagado: o histórico é a fonte de verdade.
+
+## Modelos e favoritos
+
+- **Modelos** (`/modelos`): a partir de uma requisição, o mestre guarda itens + justificação com um nome; pode
+  partilhar com os outros mestres. Em “Nova requisição” escolhe-se o modelo e o orçamento aparece preenchido.
+- **Favoritos**: na tabela de itens da requisição, a estrela guarda o material; em “Nova requisição” há uma lista
+  de favoritos para acrescentar linhas com um clique. Cada mestre só vê os seus.
+
+## Saldo abatido
+
+- Quando o financeiro fecha com **“abatido a próxima requisição”**, o saldo fica registado como crédito do mestre
+  para aquele site (`creditos_abatimento`).
+- É aplicado **automaticamente** às requisições seguintes desse mestre/site, no momento da submissão (até ao valor
+  estimado). O financeiro vê o crédito aplicado e só transfere o que falta.
+- Se o crédito cobrir tudo, o financeiro confirma a cobertura sem transferência; o fecho é aceite porque o
+  financiamento está documentado pelo crédito.
+- Cancelar ou reprovar uma requisição devolve o crédito ao saldo disponível.
+- O acerto e os relatórios contam transferências **mais** saldo abatido.
+
 ## Publicar na Vercel
 
 1. Importe o repositório (framework Next.js).
@@ -67,7 +95,8 @@ O sistema existe para uma coisa: **o dinheiro tem prova em cada passo** — e qu
 
 - Limite de 4 MB por ficheiro (limite da Vercel para pedidos).
 - Regras de aprovação (nº de aprovadores por valor) estão na tabela `regras_aprovacao`.
-- O banco recusa fechar uma requisição sem os dois comprovativos.
+- O banco recusa fechar uma requisição sem prova de financiamento (transferência ou saldo abatido) e sem
+  comprovativo de compra.
 - Vários envios de dinheiro e várias compras por requisição são permitidos (top-up e compras em fornecedores
   diferentes).
 - Saldo devolvido exige comprovativo; excesso pago pelo mestre é registado como reembolso com prova.

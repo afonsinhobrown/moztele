@@ -148,3 +148,17 @@ button.link{border:0;background:none;color:inherit;padding:0;text-decoration:und
   .tira{grid-template-columns:1fr 1fr}
   .hero-acoes .btn{width:100%;text-align:center}
 }
+
+/* ---------- Inventário, modelos e saldo abatido ---------- */
+.stock{font-size:12px;font-weight:700;border-radius:10px;padding:1px 8px;background:#e8f3ec;color:#1c6b3a}
+.stock.baixo{background:#fff4d6;color:#8a5a00}
+.stock.sem{background:#fde2e1;color:#a11}
+.modelos{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px;margin:10px 0}
+.modelo-card{background:#fff;border:1px solid #e6ecf3;border-radius:14px;padding:16px;box-shadow:0 8px 24px rgba(15,47,82,.04)}
+.modelo-card h3{font-size:15px;margin:0}
+.lista-modelo{margin:8px 0 12px;padding-left:18px;color:#46586c;font-size:13px}
+.favoritos-form{display:flex;gap:8px;align-items:center;margin:4px 0 10px;flex-wrap:wrap}
+.favoritos-form select{flex:1;min-width:180px}
+.favoritos-form button{margin:0}
+.estrela{border:0;background:none;cursor:pointer;font-size:16px;color:#b9c4d0;padding:0 4px;line-height:1}
+.estrela:hover{color:#f0a202}

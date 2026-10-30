@@ -1,5 +1,5 @@
 import { exigir } from "@/lib/auth";
-import { q } from "@/lib/db";
+import { q, q1 } from "@/lib/db";
 import { criarRequisicao } from "@/app/actions";
 import ItensForm from "@/components/ItensForm";
 import FicheiroInput from "@/components/FicheiroInput";
@@ -17,7 +17,7 @@ const ERROS = {
 
 export default async function Nova({ searchParams }) {
   const s = await exigir("mestre");
-  const [sites, categorias] = await Promise.all([
+  const [sites, categorias, modelos, favoritos] = await Promise.all([
     q(
       `SELECT st.id, st.nome FROM sites st
         WHERE st.activo AND (EXISTS (SELECT 1 FROM mestre_sites ms WHERE ms.mestre_id=$1 AND ms.site_id=st.id)
@@ -26,11 +26,47 @@ export default async function Nova({ searchParams }) {
       [s.id]
     ),
     q("SELECT id, nome FROM categorias ORDER BY nome"),
+    q(
+      `SELECT id, nome, mestre_id, partilhado, itens
+         FROM modelos_requisicao
+        WHERE mestre_id=$1 OR partilhado
+        ORDER BY criado_em DESC`,
+      [s.id]
+    ),
+    q(
+      `SELECT id, descricao, unidade, preco_unitario, categoria_id
+         FROM itens_favoritos WHERE mestre_id=$1 ORDER BY descricao`,
+      [s.id]
+    ),
   ]);
+
+  const modeloId = Number(searchParams.modelo);
+  const modelo = modeloId
+    ? await q1("SELECT * FROM modelos_requisicao WHERE id=$1 AND (mestre_id=$2 OR partilhado)", [modeloId, s.id])
+    : null;
+  const iniciais = Array.isArray(modelo?.itens) ? modelo.itens : [];
+
   return (
     <>
       <h1>Nova requisição</h1>
       {searchParams.erro && <p className="erro">{ERROS[searchParams.erro] || "Não foi possível guardar."}</p>}
+
+      {modelos.length > 0 && (
+        <form method="get" className="card inline">
+          <select name="modelo" defaultValue={modeloId || ""} aria-label="Modelo">
+            <option value="">Começar do zero</option>
+            {modelos.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.nome}
+                {String(m.mestre_id) !== String(s.id) ? " (partilhado)" : ""}
+              </option>
+            ))}
+          </select>
+          <button className="btn sec">Usar modelo</button>
+          {modelo && <span className="mut pequeno">A usar “{modelo.nome}”.</span>}
+        </form>
+      )}
+
       <form action={criarRequisicao} className="card">
         <label>Site / obra</label>
         <select name="site_id" required>
@@ -39,7 +75,14 @@ export default async function Nova({ searchParams }) {
         </select>
 
         <label>Justificação</label>
-        <textarea name="justificacao" rows="3" required maxLength="2000" placeholder="Porque precisa deste equipamento?" />
+        <textarea
+          name="justificacao"
+          rows="3"
+          required
+          maxLength="2000"
+          defaultValue={modelo?.justificacao || ""}
+          placeholder="Porque precisa deste equipamento?"
+        />
 
         <label>Urgência</label>
         <select name="urgencia" defaultValue="normal">
@@ -48,7 +91,7 @@ export default async function Nova({ searchParams }) {
         </select>
 
         <h2>Orçamento</h2>
-        <ItensForm categorias={categorias} />
+        <ItensForm categorias={categorias} iniciais={iniciais} favoritos={favoritos} />
 
         <h2>Documentos do orçamento</h2>
         <select name="tipo_anexo" defaultValue="cotacao">

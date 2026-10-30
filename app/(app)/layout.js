@@ -17,6 +17,8 @@ export default async function AppLayout({ children }) {
           <nav>
             <Link href="/requisicoes">Requisições</Link>
             {s.perfil === "mestre" && <Link href="/requisicoes/nova">Nova</Link>}
+            {s.perfil === "mestre" && <Link href="/modelos">Modelos</Link>}
+            <Link href="/inventario">Inventário</Link>
             {["admin", "financeiro", "aprovador"].includes(s.perfil) && (
               <Link href="/relatorios/requisicoes">Relatórios</Link>
             )}

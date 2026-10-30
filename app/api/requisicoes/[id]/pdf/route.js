@@ -19,9 +19,11 @@ export async function GET(req, { params }) {
   const id = Number(params.id);
   const d = await obterRequisicao(id, s);
   if (!d) return new NextResponse("Não encontrado", { status: 404 });
-  const { r, itens, anexos, aprov, pags, compras, acerto, hist, coment, reembolsos } = d;
+  const { r, itens, anexos, aprov, pags, compras, acerto, hist, coment, reembolsos, creditos } = d;
 
   const enviado = pags.reduce((a, p) => a + Number(p.valor), 0);
+  const credito = creditos.reduce((a, c) => a + Number(c.valor), 0);
+  const financiado = enviado + credito;
   const gasto = compras.reduce((a, c) => a + Number(c.valor_gasto), 0);
 
   const st = await criarDocumento({
@@ -88,6 +90,11 @@ export async function GET(req, { params }) {
       ],
       linhas: pags.map((p) => [money(p.valor), p.metodo, p.referencia || "-", p.financeiro, dataHora(p.enviado_em)]),
     });
+  if (credito > 0)
+    texto(st, `Saldo abatido aplicado: ${money(credito)} (creditado de uma requisição anterior).`, {
+      size: 9,
+      gap: 2,
+    });
 
   secao(st, "Compras");
   if (compras.length === 0) texto(st, "Ainda sem comprovativo de compra.");
@@ -102,8 +109,10 @@ export async function GET(req, { params }) {
 
   resumo(st, [
     { rotulo: "Total enviado", valor: money(enviado) },
+    { rotulo: "Saldo abatido aplicado", valor: money(credito) },
+    { rotulo: "Total financiado", valor: money(financiado) },
     { rotulo: "Total gasto", valor: money(gasto) },
-    { rotulo: "Saldo", valor: money(enviado - gasto) },
+    { rotulo: "Saldo", valor: money(financiado - gasto) },
   ]);
 
   if (acerto) {
