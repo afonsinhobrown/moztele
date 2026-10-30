@@ -162,3 +162,10 @@ button.link{border:0;background:none;color:inherit;padding:0;text-decoration:und
 .favoritos-form button{margin:0}
 .estrela{border:0;background:none;cursor:pointer;font-size:16px;color:#b9c4d0;padding:0 4px;line-height:1}
 .estrela:hover{color:#f0a202}
+/* ---------- Credenciais de teste no login ---------- */
+.credenciais-teste{margin-top:14px;padding-top:10px;border-top:1px dashed #e0b45c;overflow-x:auto}
+.teste-aviso{background:#fff4d6;color:#7a4b00;border-radius:8px;padding:8px 10px;font-size:12px;margin:0 0 8px;line-height:1.4}
+.credenciais-teste table{font-size:12px}
+.credenciais-teste th,.credenciais-teste td{padding:4px 5px;border-bottom:1px solid #f1e6cd;white-space:nowrap}
+.credenciais-teste th{font-size:10px}
+.credenciais-teste code{background:#f4f6f9;border-radius:4px;padding:1px 4px;font-size:11px}

@@ -82,6 +82,22 @@ O sistema existe para uma coisa: **o dinheiro tem prova em cada passo** — e qu
 - Cancelar ou reprovar uma requisição devolve o crédito ao saldo disponível.
 - O acerto e os relatórios contam transferências **mais** saldo abatido.
 
+## Contas de teste (fase de teste)
+
+Enquanto o sistema estiver em demonstração, a página de login mostra estas contas e as respectivas senhas:
+
+| Perfil | Telefone | Senha |
+| --- | --- | --- |
+| Administração | `840000000` | `admin123` |
+| Mestre | `841111111` | `teste2026` |
+| Aprovador | `842222222` | `teste2026` |
+| Financeiro | `843333333` | `teste2026` |
+
+- Recriar/repôr: `npm run criar-testes`.
+- **No fim da fase de teste:** `npm run remover-testes` (apaga as contas de teste; se tiverem histórico, desactiva-as)
+  e defina `MOSTRAR_CREDENCIAIS_TESTE=false` para esconder a lista do login. Mude também a senha do admin.
+- Estas senhas são públicas de propósito. Não deixar isto ligado quando o sistema for usado com dinheiro real.
+
 ## Publicar na Vercel
 
 1. Importe o repositório (framework Next.js).

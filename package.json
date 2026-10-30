@@ -10,6 +10,8 @@
     "test": "node --test tests/",
     "migrar": "node --env-file=.env.local scripts/migrar.mjs",
     "criar-admin": "node --env-file=.env.local scripts/criar-admin.mjs",
+    "criar-testes": "node --env-file=.env.local scripts/criar-testes.mjs",
+    "remover-testes": "node --env-file=.env.local scripts/remover-testes.mjs",
     "alertas": "node --env-file=.env.local scripts/alertas.mjs"
   },
   "dependencies": {
