@@ -41,8 +41,8 @@ O sistema existe para uma coisa: **o dinheiro tem prova em cada passo** — e qu
 
 - Sessões JWT assinadas com `AUTH_SECRET`, revogáveis: desactivar um utilizador ou mudar a senha corta acessos antigos.
 - Login com limite de tentativas (8 falhas em 15 minutos bloqueiam telefone e IP).
-- Senhas com mínimo de 8 caracteres, letras e números. Novos utilizadores são obrigados a mudar a senha no
-  primeiro acesso; administradores existentes também (migração 001).
+- Senhas com mínimo de 8 caracteres, letras e números. Novos utilizadores — e todos os que já existiam quando a
+  migração 001 foi aplicada — são obrigados a mudar a senha no primeiro acesso.
 - Cada mudança de estado fica no histórico com o nome de quem a fez.
 - Cabeçalhos de segurança (`nosniff`, `X-Frame-Options`, política de permissões) em todas as respostas.
 
