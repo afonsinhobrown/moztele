@@ -1,12 +1,16 @@
 {
   "name": "moztele",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "criar-admin": "node --env-file=.env.local scripts/criar-admin.mjs"
+    "test": "node --test tests/",
+    "migrar": "node --env-file=.env.local scripts/migrar.mjs",
+    "criar-admin": "node --env-file=.env.local scripts/criar-admin.mjs",
+    "alertas": "node --env-file=.env.local scripts/alertas.mjs"
   },
   "dependencies": {
     "@vercel/blob": "^0.24.1",

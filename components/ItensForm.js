@@ -2,9 +2,16 @@
 import { useState } from "react";
 
 const vazio = { d: "", qtd: 1, un: "un", pr: "", cat: "" };
+const normalizar = (i) => ({
+  d: i.descricao || "",
+  qtd: i.quantidade ?? 1,
+  un: i.unidade || "un",
+  pr: i.preco_unitario ?? "",
+  cat: i.categoria_id ? String(i.categoria_id) : "",
+});
 
-export default function ItensForm({ categorias }) {
-  const [rows, setRows] = useState([{ ...vazio }]);
+export default function ItensForm({ categorias, iniciais = [] }) {
+  const [rows, setRows] = useState(iniciais.length ? iniciais.map(normalizar) : [{ ...vazio }]);
   const set = (i, k, v) => setRows((r) => r.map((x, j) => (j === i ? { ...x, [k]: v } : x)));
   const total = rows.reduce(
     (a, x) => a + (Number(x.qtd) || 0) * (Number(String(x.pr).replace(",", ".")) || 0),

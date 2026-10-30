@@ -1,24 +1,52 @@
 import { notFound } from "next/navigation";
 import { exigir } from "@/lib/auth";
+import { q } from "@/lib/db";
 import { obterRequisicao } from "@/lib/requisicoes";
 import { Badge, ESTADOS, MT, dt } from "@/lib/ui";
+import { prazo, rotuloPrazo } from "@/lib/prazos";
 import Btn from "@/components/Btn";
+import ItensForm from "@/components/ItensForm";
+import FicheiroInput from "@/components/FicheiroInput";
 import {
-  adicionarAnexo, submeter, cancelar, decidir, enviarDinheiro,
-  registarCompra, fecharRequisicao, comentar,
+  adicionarAnexo,
+  submeter,
+  cancelar,
+  decidir,
+  enviarDinheiro,
+  registarCompra,
+  fecharRequisicao,
+  comentar,
+  editarItens,
+  duplicarRequisicao,
+  registarReembolso,
 } from "@/app/actions";
 
 const ERROS = {
   motivo: "Indique o motivo.",
-  comprovativo: "Indique o valor e anexe o comprovativo de transferência.",
+  comprovativo: "Indique o valor e anexe o comprovativo (PDF/JPG/PNG, até 4 MB).",
   "sem-anexo": "Anexe pelo menos um documento do orçamento antes de submeter.",
   compra: "Indique o valor gasto e anexe pelo menos um comprovativo de compra.",
+  data: "A data da compra não pode estar no futuro.",
+  dados: "Verifique os valores: quantidades e preços têm de ser números válidos.",
   upload: "Não foi possível carregar o ficheiro. Verifique o tamanho (máx. 4 MB) e tente novamente.",
+  tamanho: "O ficheiro tem mais de 4 MB. Reduza a foto ou o PDF e tente outra vez.",
+  tipo: "Só são aceites ficheiros PDF, JPG ou PNG. Converta o documento e tente outra vez.",
+  duplicado: "Este comprovativo já foi usado noutra requisição. Cada factura só pode entrar uma vez.",
+  estado: "A requisição já mudou de estado. Recarregue a página e tente de novo.",
+  ja: "Já registou a sua decisão nesta submissão.",
+  saldo: "O comprovativo da devolução do saldo é obrigatório.",
 };
 
 const Hidden = ({ id }) => <input type="hidden" name="id" value={id} />;
+
 const Links = ({ urls }) => (
-  <>{urls.map((u, i) => <a key={i} href={u} target="_blank" rel="noreferrer" className="ficheiro">📎 ficheiro {i + 1}</a>)}</>
+  <>
+    {urls.map((u, i) => (
+      <a key={i} href={u} target="_blank" rel="noreferrer" className="ficheiro">
+        📎 ficheiro {i + 1}
+      </a>
+    ))}
+  </>
 );
 
 export default async function Detalhe({ params, searchParams }) {
@@ -26,62 +54,153 @@ export default async function Detalhe({ params, searchParams }) {
   const id = Number(params.id);
   const dados = await obterRequisicao(id, s);
   if (!dados) notFound();
-  const { r, itens, anexos, aprov, pags, compras, acerto, hist, coment, votou } = dados;
+  const { r, itens, anexos, aprov, pags, compras, acerto, hist, coment, votou, reembolsos, aprovacao } = dados;
+
+  const [categorias, fornecedores] = await Promise.all([
+    q("SELECT id, nome FROM categorias ORDER BY nome"),
+    q("SELECT id, nome FROM fornecedores WHERE activo ORDER BY nome"),
+  ]);
 
   const enviado = pags.reduce((a, p) => a + Number(p.valor), 0);
   const gasto = compras.reduce((a, c) => a + Number(c.valor_gasto), 0);
+  const saldo = enviado - gasto;
   const dono = s.perfil === "mestre";
   const e = r.estado;
+  const pz = prazo(e, r.actualizado_em);
+  const podeEditar = dono && ["rascunho", "correccao_pedida"].includes(e);
+  const podePagar = s.perfil === "financeiro" && ["aprovado", "dinheiro_enviado"].includes(e);
+  const podeComprar = dono && ["dinheiro_enviado", "compra_comprovada"].includes(e);
 
   return (
     <>
       <div className="linha">
-        <h1>{r.codigo} <Badge estado={e} /></h1>
-        <a href={`/api/requisicoes/${id}/pdf`} className="btn pri" target="_blank" rel="noreferrer">Gerar PDF</a>
+        <h1>
+          {r.codigo} <Badge estado={e} />
+          {pz && <span className={`prazo ${pz.nivel}`}>{rotuloPrazo(pz.nivel)} · {pz.texto}</span>}
+        </h1>
+        <div className="acoes">
+          <a href={`/api/requisicoes/${id}/pdf`} className="btn pri" target="_blank" rel="noreferrer">
+            Gerar PDF
+          </a>
+          {dono && (
+            <form action={duplicarRequisicao}>
+              <Hidden id={id} />
+              <Btn className="sec">Duplicar</Btn>
+            </form>
+          )}
+        </div>
       </div>
       {searchParams.erro && <p className="erro">{ERROS[searchParams.erro] || "Não foi possível concluir."}</p>}
 
       <div className="card">
-        <p><b>Mestre:</b> {r.mestre} ({r.telefone}) · <b>Site:</b> {r.site} · <b>Urgência:</b> {r.urgencia}</p>
-        <p><b>Justificação:</b> {r.justificacao}</p>
-        <p><b>Criada:</b> {dt(r.criado_em)}</p>
+        <p>
+          <b>Mestre:</b> {r.mestre} ({r.telefone}) · <b>Site:</b> {r.site} · <b>Urgência:</b> {r.urgencia}
+        </p>
+        <p>
+          <b>Justificação:</b> {r.justificacao}
+        </p>
+        <p>
+          <b>Criada:</b> {dt(r.criado_em)} · <b>Última alteração:</b> {dt(r.actualizado_em)}
+        </p>
       </div>
 
       <h2>Orçamento</h2>
       <div className="card tabela">
         <table>
-          <thead><tr><th>Item</th><th>Categoria</th><th>Qtd</th><th>Preço un.</th><th>Subtotal</th></tr></thead>
+          <thead>
+            <tr>
+              <th>Item</th>
+              <th>Categoria</th>
+              <th>Qtd</th>
+              <th>Preço un.</th>
+              <th>Subtotal</th>
+            </tr>
+          </thead>
           <tbody>
             {itens.map((i) => (
-              <tr key={i.id}><td>{i.descricao}</td><td>{i.categoria}</td><td>{Number(i.quantidade)} {i.unidade}</td><td>{MT(i.preco_unitario)}</td><td>{MT(i.subtotal)}</td></tr>
+              <tr key={i.id}>
+                <td>{i.descricao}</td>
+                <td>{i.categoria}</td>
+                <td>{Number(i.quantidade)} {i.unidade}</td>
+                <td>{MT(i.preco_unitario)}</td>
+                <td>{MT(i.subtotal)}</td>
+              </tr>
             ))}
-            <tr><td colSpan="4"><b>Total estimado</b></td><td><b>{MT(r.valor_estimado)}</b></td></tr>
+            <tr>
+              <td colSpan="4">
+                <b>Total estimado</b>
+              </td>
+              <td>
+                <b>{MT(r.valor_estimado)}</b>
+              </td>
+            </tr>
           </tbody>
         </table>
         <p>
           <b>Documentos:</b>{" "}
-          {anexos.length === 0 ? <span className="mut">nenhum</span> : anexos.map((a) => (
-            <a key={a.id} href={a.ficheiro_url} target="_blank" rel="noreferrer" className="ficheiro">📎 {a.tipo}</a>
-          ))}
+          {anexos.length === 0 ? (
+            <span className="mut">nenhum</span>
+          ) : (
+            anexos.map((a) => (
+              <a key={a.id} href={a.ficheiro_url} target="_blank" rel="noreferrer" className="ficheiro">
+                📎 {a.tipo}
+                {a.nome_original ? ` · ${a.nome_original}` : ""}
+              </a>
+            ))
+          )}
         </p>
-        {dono && ["rascunho", "correccao_pedida"].includes(e) && (
+        {podeEditar && (
           <form action={adicionarAnexo} className="inline">
             <Hidden id={id} />
-            <select name="tipo_anexo"><option value="cotacao">Cotação</option><option value="proforma">Proforma</option><option value="foto">Foto</option><option value="outro">Outro</option></select>
-            <input type="file" name="anexos" multiple accept="image/*,application/pdf" required />
+            <select name="tipo_anexo">
+              <option value="cotacao">Cotação</option>
+              <option value="proforma">Proforma</option>
+              <option value="foto">Foto</option>
+              <option value="outro">Outro</option>
+            </select>
+            <FicheiroInput name="anexos" multiple required />
             <Btn className="sec">Anexar</Btn>
           </form>
         )}
       </div>
 
-      {dono && ["rascunho", "correccao_pedida"].includes(e) && (
+      {podeEditar && (
+        <details className="card">
+          <summary>
+            <b>Editar itens do orçamento</b>
+          </summary>
+          <form action={editarItens} style={{ marginTop: 12 }}>
+            <Hidden id={id} />
+            <ItensForm categorias={categorias} iniciais={itens} />
+            <Btn className="pri">Guardar itens</Btn>
+          </form>
+        </details>
+      )}
+
+      {podeEditar && (
         <div className="acoes">
-          <form action={submeter}><Hidden id={id} /><Btn className="pri">{e === "rascunho" ? "Submeter para aprovação" : "Re-submeter"}</Btn></form>
-          <form action={cancelar}><Hidden id={id} /><Btn className="sec">Cancelar requisição</Btn></form>
+          <form action={submeter}>
+            <Hidden id={id} />
+            <Btn className="pri">{e === "rascunho" ? "Submeter para aprovação" : "Re-submeter"}</Btn>
+          </form>
+          <form action={cancelar}>
+            <Hidden id={id} />
+            <Btn className="sec">Cancelar requisição</Btn>
+          </form>
         </div>
       )}
       {dono && e === "submetido" && (
-        <form action={cancelar}><Hidden id={id} /><Btn className="sec">Cancelar requisição</Btn></form>
+        <form action={cancelar}>
+          <Hidden id={id} />
+          <Btn className="sec">Cancelar requisição</Btn>
+        </form>
+      )}
+
+      {aprovacao.necessarios > 1 && ["submetido", "aprovado"].includes(e) && (
+        <p className="card aviso-inline">
+          <b>Aprovações:</b> {aprovacao.obtidos} de {aprovacao.necessarios}
+          {aprovacao.faltam > 0 ? ` — faltam ${aprovacao.faltam}.` : " — concluídas."}
+        </p>
       )}
 
       {aprov.length > 0 && (
@@ -89,7 +208,10 @@ export default async function Detalhe({ params, searchParams }) {
           <h2>Decisões</h2>
           <div className="card">
             {aprov.map((a) => (
-              <p key={a.id}><b>{a.aprovador}</b>: {a.decisao}{a.motivo ? ` — ${a.motivo}` : ""} <span className="mut">({dt(a.decidido_em)})</span></p>
+              <p key={a.id}>
+                <b>{a.aprovador}</b>: {a.decisao}
+                {a.motivo ? ` — ${a.motivo}` : ""} <span className="mut">({dt(a.decidido_em)})</span>
+              </p>
             ))}
           </div>
         </>
@@ -114,23 +236,35 @@ export default async function Detalhe({ params, searchParams }) {
         {pags.length === 0 && <p className="mut">Ainda não foi enviado dinheiro.</p>}
         {pags.map((p) => (
           <p key={p.id}>
-            <b>{MT(p.valor)}</b> via {p.metodo}{p.referencia ? ` (ref. ${p.referencia})` : ""} por {p.financeiro} · {dt(p.enviado_em)} <Links urls={p.urls} />
+            <b>{MT(p.valor)}</b> via {p.metodo}
+            {p.referencia ? ` (ref. ${p.referencia})` : ""} por {p.financeiro} · {dt(p.enviado_em)}{" "}
+            <Links urls={p.urls} />
           </p>
         ))}
       </div>
 
-      {s.perfil === "financeiro" && e === "aprovado" && (
+      {podePagar && (
         <form action={enviarDinheiro} className="card">
-          <h2>Enviar dinheiro</h2>
+          <h2>{pags.length === 0 ? "Enviar dinheiro" : "Enviar mais dinheiro"}</h2>
           <Hidden id={id} />
           <label>Valor (MZN)</label>
-          <input name="valor" inputMode="decimal" defaultValue={Number(r.valor_estimado)} required />
+          <input
+            name="valor"
+            inputMode="decimal"
+            defaultValue={saldo > 0 ? Number(saldo.toFixed(2)) : ""}
+            required
+          />
           <label>Método</label>
-          <select name="metodo"><option value="mpesa">M-Pesa</option><option value="emola">e-Mola</option><option value="mkesh">mKesh</option><option value="banco">Banco</option><option value="numerario">Numerário</option></select>
+          <select name="metodo">
+            <option value="mpesa">M-Pesa</option>
+            <option value="emola">e-Mola</option>
+            <option value="mkesh">mKesh</option>
+            <option value="banco">Banco</option>
+            <option value="numerario">Numerário</option>
+          </select>
           <label>Referência da transacção</label>
           <input name="referencia" />
-          <label>Comprovativo de transferência (obrigatório)</label>
-          <input type="file" name="comprovativo" accept="image/*,application/pdf" required />
+          <FicheiroInput name="comprovativo" label="Comprovativo de transferência (obrigatório)" required />
           <Btn className="pri">Registar envio</Btn>
         </form>
       )}
@@ -139,29 +273,57 @@ export default async function Detalhe({ params, searchParams }) {
       <div className="card">
         {compras.length === 0 && <p className="mut">Ainda sem comprovativo de compra.</p>}
         {compras.map((c) => (
-          <p key={c.id}><b>{MT(c.valor_gasto)}</b> em {new Date(c.data_compra).toLocaleDateString("pt-MZ")} <Links urls={c.urls} /></p>
+          <p key={c.id}>
+            <b>{MT(c.valor_gasto)}</b> em {new Date(c.data_compra).toLocaleDateString("pt-MZ")}
+            {c.fornecedor ? ` · ${c.fornecedor}` : ""} <Links urls={c.urls} />
+          </p>
         ))}
       </div>
 
-      {dono && e === "dinheiro_enviado" && (
+      {podeComprar && (
         <form action={registarCompra} className="card">
-          <h2>Registar compra</h2>
+          <h2>{compras.length === 0 ? "Registar compra" : "Registar outra compra"}</h2>
           <Hidden id={id} />
           <label>Valor gasto (MZN)</label>
           <input name="valor_gasto" inputMode="decimal" required />
           <label>Data da compra</label>
-          <input name="data_compra" type="date" />
+          <input name="data_compra" type="date" max={new Date().toISOString().slice(0, 10)} />
+          <label>Fornecedor (opcional)</label>
+          <select name="fornecedor_id">
+            <option value="">—</option>
+            {fornecedores.map((f) => (
+              <option key={f.id} value={f.id}>{f.nome}</option>
+            ))}
+          </select>
           <label>Tipo de comprovativo</label>
-          <select name="tipo"><option value="factura">Factura</option><option value="recibo">Recibo</option><option value="foto_material">Foto do material</option><option value="outro">Outro</option></select>
-          <input type="file" name="comprovativos" multiple accept="image/*,application/pdf" required />
+          <select name="tipo">
+            <option value="factura">Factura</option>
+            <option value="recibo">Recibo</option>
+            <option value="foto_material">Foto do material</option>
+            <option value="outro">Outro</option>
+          </select>
+          <FicheiroInput name="comprovativos" multiple required label="Comprovativos (obrigatório)" />
           <Btn className="pri">Enviar comprovativo de compra</Btn>
         </form>
       )}
 
       {(pags.length > 0 || compras.length > 0) && (
         <p className="card">
-          <b>Enviado:</b> {MT(enviado)} · <b>Gasto:</b> {MT(gasto)} · <b>Saldo:</b> {MT(enviado - gasto)}
-          {acerto && <> · <b>Acerto:</b> {acerto.estado.replaceAll("_", " ")}</>}
+          <b>Enviado:</b> {MT(enviado)} · <b>Gasto:</b> {MT(gasto)} · <b>Saldo:</b> {MT(saldo)}
+          {acerto && (
+            <>
+              {" "}
+              · <b>Acerto:</b> {acerto.estado.replaceAll("_", " ")}
+              {acerto.comprovativo_url && (
+                <>
+                  {" "}
+                  <a href={acerto.comprovativo_url} target="_blank" rel="noreferrer" className="ficheiro">
+                    📎 comprovativo
+                  </a>
+                </>
+              )}
+            </>
+          )}
         </p>
       )}
 
@@ -169,27 +331,76 @@ export default async function Detalhe({ params, searchParams }) {
         <form action={fecharRequisicao} className="card">
           <h2>Acerto e fecho</h2>
           <Hidden id={id} />
-          {enviado - gasto > 0 && (
+          {saldo > 0 && (
             <>
-              <label>O saldo de {MT(enviado - gasto)} foi…</label>
-              <select name="destino"><option value="devolvido">Devolvido</option><option value="abatido">Abatido a próxima requisição</option></select>
+              <p>
+                <label>O saldo de {MT(saldo)} foi…</label>
+                <select name="destino">
+                  <option value="devolvido">Devolvido (anexe o comprovativo)</option>
+                  <option value="abatido">Abatido a próxima requisição</option>
+                </select>
+              </p>
+              <FicheiroInput name="comprovativo" label="Comprovativo da devolução (obrigatório se devolvido)" />
             </>
           )}
-          {enviado - gasto < 0 && <p className="mut">O mestre gastou mais do que recebeu: fica como excesso a reembolsar.</p>}
+          {saldo < 0 && (
+            <p className="mut">
+              O mestre gastou {MT(-saldo)} acima do que recebeu. Ao fechar, fica registado como excesso a reembolsar.
+            </p>
+          )}
           <Btn className="pri">Fechar requisição</Btn>
         </form>
       )}
 
+      {s.perfil === "financeiro" && acerto?.estado === "excesso_a_reembolsar" && (
+        <form action={registarReembolso} className="card">
+          <h2>Reembolsar o excesso</h2>
+          <Hidden id={id} />
+          <p>
+            O mestre gastou <b>{MT(-Number(acerto.saldo))}</b> acima do enviado. Registe a devolução com o comprovativo.
+          </p>
+          <FicheiroInput name="comprovativo" label="Comprovativo do reembolso (obrigatório)" required />
+          <Btn className="pri">Marcar como reembolsado</Btn>
+        </form>
+      )}
+
+      {reembolsos.length > 0 && (
+        <div className="card">
+          <b>Reembolsos registados:</b>
+          {reembolsos.map((x) => (
+            <p key={x.id}>
+              {MT(x.valor)} · {dt(x.criado_em)}{" "}
+              <a href={x.comprovativo_url} target="_blank" rel="noreferrer" className="ficheiro">
+                📎 comprovativo
+              </a>
+            </p>
+          ))}
+        </div>
+      )}
+
       <h2>Conversa</h2>
       <div className="card">
-        {coment.map((c) => <p key={c.id}><b>{c.nome}</b> <span className="mut">{dt(c.criado_em)}</span><br />{c.texto}</p>)}
-        <form action={comentar} className="inline"><Hidden id={id} /><input name="texto" placeholder="Escreva um comentário…" required /><Btn className="sec">Enviar</Btn></form>
+        {coment.map((c) => (
+          <p key={c.id}>
+            <b>{c.nome}</b> <span className="mut">{dt(c.criado_em)}</span>
+            <br />
+            {c.texto}
+          </p>
+        ))}
+        <form action={comentar} className="inline">
+          <Hidden id={id} />
+          <input name="texto" placeholder="Escreva um comentário…" required />
+          <Btn className="sec">Enviar</Btn>
+        </form>
       </div>
 
       <h2>Histórico</h2>
       <div className="card">
         {hist.map((h) => (
-          <p key={h.id} className="mut">{dt(h.criado_em)} · {ESTADOS[h.estado_anterior] || "—"} → <b>{ESTADOS[h.estado_novo]}</b>{h.nome ? ` · ${h.nome}` : ""}</p>
+          <p key={h.id} className="mut">
+            {dt(h.criado_em)} · {ESTADOS[h.estado_anterior] || "—"} → <b>{ESTADOS[h.estado_novo]}</b>
+            {h.nome ? ` · ${h.nome}` : ""}
+          </p>
         ))}
       </div>
     </>

@@ -19,7 +19,7 @@ export async function GET(req, { params }) {
   const id = Number(params.id);
   const d = await obterRequisicao(id, s);
   if (!d) return new NextResponse("Não encontrado", { status: 404 });
-  const { r, itens, anexos, aprov, pags, compras, acerto, hist, coment } = d;
+  const { r, itens, anexos, aprov, pags, compras, acerto, hist, coment, reembolsos } = d;
 
   const enviado = pags.reduce((a, p) => a + Number(p.valor), 0);
   const gasto = compras.reduce((a, c) => a + Number(c.valor_gasto), 0);
@@ -114,6 +114,19 @@ export async function GET(req, { params }) {
       { rotulo: "Saldo", valor: money(acerto.saldo) },
       { rotulo: "Estado", valor: acerto.estado.replaceAll("_", " ") },
     ]);
+    if (acerto.comprovativo_url) texto(st, "Comprovativo da devolução anexado.", { size: 9 });
+  }
+
+  if (reembolsos?.length) {
+    secao(st, "Reembolsos ao mestre");
+    tabela(st, {
+      colunas: [
+        { titulo: "Valor", peso: 1.4, align: "right" },
+        { titulo: "Data", peso: 1.6 },
+        { titulo: "Comprovativo", peso: 1.4 },
+      ],
+      linhas: reembolsos.map((x) => [money(x.valor), dataHora(x.criado_em), x.comprovativo_url ? "anexado" : "-"]),
+    });
   }
 
   if (coment.length > 0) {

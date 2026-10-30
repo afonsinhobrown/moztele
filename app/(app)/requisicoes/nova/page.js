@@ -2,7 +2,18 @@ import { exigir } from "@/lib/auth";
 import { q } from "@/lib/db";
 import { criarRequisicao } from "@/app/actions";
 import ItensForm from "@/components/ItensForm";
+import FicheiroInput from "@/components/FicheiroInput";
 import Btn from "@/components/Btn";
+
+const ERROS = {
+  1: "Preencha o site, a justificação e pelo menos um item.",
+  2: "Anexe pelo menos um documento (cotação, proforma ou foto) para submeter.",
+  dados: "Verifique os valores: quantidades e preços têm de ser números válidos.",
+  site: "Escolha um site a que tenha acesso.",
+  upload: "Não foi possível carregar o ficheiro. Verifique o tamanho (máx. 4 MB) e tente novamente.",
+  tamanho: "O ficheiro tem mais de 4 MB. Reduza a foto ou o PDF e tente outra vez.",
+  tipo: "Só são aceites ficheiros PDF, JPG ou PNG.",
+};
 
 export default async function Nova({ searchParams }) {
   const s = await exigir("mestre");
@@ -19,9 +30,7 @@ export default async function Nova({ searchParams }) {
   return (
     <>
       <h1>Nova requisição</h1>
-      {searchParams.erro === "1" && <p className="erro">Preencha o site, a justificação e pelo menos um item.</p>}
-      {searchParams.erro === "2" && <p className="erro">Anexe pelo menos um documento (cotação, proforma ou foto) para submeter.</p>}
-      {searchParams.erro === "upload" && <p className="erro">Não foi possível carregar o ficheiro. Verifique o tamanho (máx. 4 MB) e tente novamente.</p>}
+      {searchParams.erro && <p className="erro">{ERROS[searchParams.erro] || "Não foi possível guardar."}</p>}
       <form action={criarRequisicao} className="card">
         <label>Site / obra</label>
         <select name="site_id" required>
@@ -30,7 +39,7 @@ export default async function Nova({ searchParams }) {
         </select>
 
         <label>Justificação</label>
-        <textarea name="justificacao" rows="3" required placeholder="Porque precisa deste equipamento?" />
+        <textarea name="justificacao" rows="3" required maxLength="2000" placeholder="Porque precisa deste equipamento?" />
 
         <label>Urgência</label>
         <select name="urgencia" defaultValue="normal">
@@ -46,8 +55,7 @@ export default async function Nova({ searchParams }) {
           <option value="cotacao">Cotação</option><option value="proforma">Factura proforma</option>
           <option value="foto">Foto</option><option value="outro">Outro</option>
         </select>
-        <input type="file" name="anexos" multiple accept="image/*,application/pdf" />
-        <p className="mut">Máximo 4 MB por ficheiro.</p>
+        <FicheiroInput name="anexos" multiple />
 
         <div className="acoes">
           <Btn name="acao" value="rascunho" className="sec">Guardar rascunho</Btn>

@@ -19,6 +19,7 @@ export default async function RelatorioFinanceiro({ searchParams }) {
   if (de) qs.set("de", de);
   if (ate) qs.set("ate", ate);
   const pdf = `/api/relatorios/financeiro/pdf${qs.toString() ? `?${qs}` : ""}`;
+  const csv = `/api/relatorios/financeiro/csv${qs.toString() ? `?${qs}` : ""}`;
   const maxMes = Math.max(1, ...meses.map((m) => Number(m.total)));
 
   return (
@@ -27,6 +28,7 @@ export default async function RelatorioFinanceiro({ searchParams }) {
         <h1>Relatório financeiro</h1>
         <div className="acoes">
           <a href={pdf} className="btn pri" target="_blank" rel="noreferrer">Gerar PDF</a>
+          <a href={csv} className="btn sec">Exportar CSV</a>
           <Link href="/relatorios/requisicoes" className="btn sec">Relatório de requisições</Link>
         </div>
       </div>

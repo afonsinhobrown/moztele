@@ -18,7 +18,7 @@ CREATE TYPE decisao_tipo         AS ENUM ('aprovado', 'reprovado', 'correccao');
 CREATE TYPE anexo_tipo           AS ENUM ('cotacao', 'proforma', 'foto', 'outro');
 CREATE TYPE metodo_pagamento     AS ENUM ('mpesa', 'emola', 'mkesh', 'banco', 'numerario');
 CREATE TYPE comprovativo_compra_tipo AS ENUM ('factura', 'recibo', 'foto_material', 'outro');
-CREATE TYPE estado_acerto        AS ENUM ('pendente', 'saldo_devolvido', 'saldo_abatido', 'sem_saldo', 'excesso_a_reembolsar');
+CREATE TYPE estado_acerto        AS ENUM ('pendente', 'saldo_devolvido', 'saldo_abatido', 'sem_saldo', 'excesso_a_reembolsar', 'excesso_reembolsado');
 CREATE TYPE canal_notificacao    AS ENUM ('whatsapp', 'sms', 'app', 'email');
 
 -- ---------------------------------------------------------------------
@@ -43,6 +43,11 @@ CREATE TABLE utilizadores (
     area_id     SMALLINT REFERENCES areas(id),   -- area principal (mestres)
     senha_hash  TEXT NOT NULL,
     activo      BOOLEAN NOT NULL DEFAULT TRUE,
+    deve_mudar_senha BOOLEAN NOT NULL DEFAULT TRUE,
+    sessao_versao    INT NOT NULL DEFAULT 0,
+    falhas_login     INT NOT NULL DEFAULT 0,
+    bloqueado_ate    TIMESTAMPTZ,
+    ultimo_acesso    TIMESTAMPTZ,
     criado_em   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -121,6 +126,27 @@ CREATE TABLE requisicao_anexos (
     criado_em      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Registo central dos ficheiros guardados (R2). Liga cada chave à requisição
+-- e guarda o hash para impedir comprovativos repetidos.
+CREATE TABLE ficheiros (
+    id            BIGSERIAL PRIMARY KEY,
+    chave         TEXT NOT NULL UNIQUE,
+    hash_sha256   CHAR(64) NOT NULL,
+    tipo_mime     VARCHAR(100) NOT NULL,
+    tamanho       INT NOT NULL CHECK (tamanho > 0),
+    nome_original VARCHAR(255),
+    requisicao_id BIGINT REFERENCES requisicoes(id) ON DELETE CASCADE,
+    finalidade    VARCHAR(20) NOT NULL
+                  CHECK (finalidade IN ('orcamento','pagamento','compra','acerto','reembolso')),
+    enviado_por   BIGINT REFERENCES utilizadores(id),
+    criado_em     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Um comprovativo financeiro não pode ser usado duas vezes.
+CREATE UNIQUE INDEX ux_ficheiros_comprovativo_hash
+    ON ficheiros(hash_sha256)
+    WHERE finalidade IN ('pagamento','compra','acerto','reembolso');
+
 -- ---------------------------------------------------------------------
 -- APROVAÇÃO
 -- ---------------------------------------------------------------------
@@ -188,8 +214,22 @@ CREATE TABLE acertos (
     valor_gasto     NUMERIC(14,2) NOT NULL DEFAULT 0,
     saldo           NUMERIC(14,2) GENERATED ALWAYS AS (valor_enviado - valor_gasto) STORED,
     estado          estado_acerto NOT NULL DEFAULT 'pendente',
+    comprovativo_url  TEXT,                 -- prova da devolução do saldo
+    comprovativo_hash CHAR(64),
     fechado_por     BIGINT REFERENCES utilizadores(id),
     fechado_em      TIMESTAMPTZ
+);
+
+-- Quando o mestre gastou mais do que recebeu, o financeiro devolve a diferença
+-- e anexa o comprovativo. Sem isto a dívida ficava em aberto para sempre.
+CREATE TABLE reembolsos (
+    id               BIGSERIAL PRIMARY KEY,
+    requisicao_id    BIGINT NOT NULL REFERENCES requisicoes(id),
+    valor            NUMERIC(14,2) NOT NULL CHECK (valor > 0),
+    comprovativo_url TEXT NOT NULL,
+    comprovativo_hash CHAR(64),
+    registado_por    BIGINT NOT NULL REFERENCES utilizadores(id),
+    criado_em        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- ---------------------------------------------------------------------
@@ -222,6 +262,15 @@ CREATE TABLE comentarios (
     criado_em      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Tentativas de login (limite por telefone e por IP).
+CREATE TABLE tentativas_login (
+    id         BIGSERIAL PRIMARY KEY,
+    telefone   TEXT,
+    ip         TEXT,
+    sucesso    BOOLEAN NOT NULL DEFAULT FALSE,
+    criado_em  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- ---------------------------------------------------------------------
 -- ÍNDICES
 -- ---------------------------------------------------------------------
@@ -236,6 +285,11 @@ CREATE INDEX idx_compras_req          ON compras(requisicao_id);
 CREATE INDEX idx_historico_req        ON historico_estados(requisicao_id);
 CREATE INDEX idx_notif_utilizador     ON notificacoes(utilizador_id, lida);
 CREATE INDEX idx_comentarios_req      ON comentarios(requisicao_id);
+CREATE INDEX idx_ficheiros_req        ON ficheiros(requisicao_id);
+CREATE INDEX idx_ficheiros_hash       ON ficheiros(hash_sha256);
+CREATE INDEX idx_tentativas_login     ON tentativas_login(criado_em);
+CREATE INDEX idx_tentativas_telefone  ON tentativas_login(telefone, criado_em);
+CREATE INDEX idx_reembolsos_req       ON reembolsos(requisicao_id);
 
 -- ---------------------------------------------------------------------
 -- REGRA: não fechar sem os dois comprovativos
@@ -271,13 +325,22 @@ FOR EACH ROW EXECUTE FUNCTION validar_fecho_requisicao();
 -- REGISTO AUTOMÁTICO DO HISTÓRICO DE ESTADOS
 -- ---------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION registar_historico_estado() RETURNS trigger AS $$
+DECLARE
+    v_utilizador BIGINT;
 BEGIN
+    -- A aplicação define app.utilizador_id no início de cada transacção.
+    BEGIN
+        v_utilizador := NULLIF(current_setting('app.utilizador_id', true), '')::BIGINT;
+    EXCEPTION WHEN others THEN
+        v_utilizador := NULL;
+    END;
+
     IF TG_OP = 'INSERT' THEN
         INSERT INTO historico_estados (requisicao_id, estado_anterior, estado_novo, utilizador_id)
-        VALUES (NEW.id, NULL, NEW.estado, NEW.mestre_id);
+        VALUES (NEW.id, NULL, NEW.estado, COALESCE(v_utilizador, NEW.mestre_id));
     ELSIF NEW.estado IS DISTINCT FROM OLD.estado THEN
-        INSERT INTO historico_estados (requisicao_id, estado_anterior, estado_novo)
-        VALUES (NEW.id, OLD.estado, NEW.estado);
+        INSERT INTO historico_estados (requisicao_id, estado_anterior, estado_novo, utilizador_id)
+        VALUES (NEW.id, OLD.estado, NEW.estado, v_utilizador);
     END IF;
     RETURN NEW;
 END;

@@ -4,6 +4,8 @@ import { Badge, ESTADOS, MT, dt } from "@/lib/ui";
 import { dadosRelatorioRequisicoes, URGENCIAS } from "@/lib/relatorios";
 import Btn from "@/components/Btn";
 
+const POR_PAGINA = 50;
+
 const queryString = (obj) => {
   const qs = new URLSearchParams();
   for (const [k, v] of Object.entries(obj)) if (v) qs.set(k, Array.isArray(v) ? v[0] : v);
@@ -13,9 +15,15 @@ const queryString = (obj) => {
 
 export default async function RelatorioRequisicoes({ searchParams }) {
   const s = await exigir("admin", "financeiro", "aprovador");
-  const { rows, n, total, sites, filtros } = await dadosRelatorioRequisicoes(searchParams, s.perfil);
+  const pagina = Math.max(1, Number(searchParams.pagina) || 1);
+  const { rows, n, total, sites, filtros, paginas } = await dadosRelatorioRequisicoes(searchParams, s.perfil, {
+    limite: POR_PAGINA,
+    offset: (pagina - 1) * POR_PAGINA,
+  });
   const { estado, de, ate, mestre, site, urgencia, texto } = filtros;
   const pdf = `/api/relatorios/requisicoes/pdf${queryString(filtros)}`;
+  const csv = `/api/relatorios/requisicoes/csv${queryString(filtros)}`;
+  const linkPagina = (p) => `/relatorios/requisicoes${queryString({ ...filtros, pagina: p })}`;
 
   return (
     <>
@@ -23,6 +31,7 @@ export default async function RelatorioRequisicoes({ searchParams }) {
         <h1>Relatório de requisições</h1>
         <div className="acoes">
           <a href={pdf} className="btn pri" target="_blank" rel="noreferrer">Gerar PDF</a>
+          <a href={csv} className="btn sec">Exportar CSV</a>
           <Link href="/relatorios/financeiro" className="btn sec">Relatório financeiro</Link>
         </div>
       </div>
@@ -60,6 +69,7 @@ export default async function RelatorioRequisicoes({ searchParams }) {
 
       <div className="card">
         <b>Resultados:</b> {n} requisição(ões) · <b>Valor estimado total:</b> {MT(total)}
+        {paginas > 1 && <span className="mut"> · página {pagina} de {paginas}</span>}
       </div>
 
       <div className="card tabela">
@@ -83,6 +93,14 @@ export default async function RelatorioRequisicoes({ searchParams }) {
           </tbody>
         </table>
       </div>
+
+      {paginas > 1 && (
+        <div className="paginacao">
+          {pagina > 1 && <Link href={linkPagina(pagina - 1)} className="btn sec">← Anterior</Link>}
+          <span className="mut">Página {pagina} de {paginas}</span>
+          {pagina < paginas && <Link href={linkPagina(pagina + 1)} className="btn sec">Seguinte →</Link>}
+        </div>
+      )}
     </>
   );
 }

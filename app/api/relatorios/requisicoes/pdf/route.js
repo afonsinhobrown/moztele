@@ -16,7 +16,7 @@ export async function GET(req) {
     return new NextResponse("Sem permissão", { status: 403 });
 
   const sp = Object.fromEntries(req.nextUrl.searchParams.entries());
-  const d = await dadosRelatorioRequisicoes(sp, s.perfil);
+  const d = await dadosRelatorioRequisicoes(sp, s.perfil, { limite: 5000, offset: 0 });
   const f = d.filtros;
 
   const partes = [];

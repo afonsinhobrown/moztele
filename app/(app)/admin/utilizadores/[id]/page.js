@@ -5,6 +5,14 @@ import { q, q1 } from "@/lib/db";
 import { actualizarUtilizador } from "@/app/actions";
 import Btn from "@/components/Btn";
 
+const ERROS = {
+  dup: "Esse telefone ou email já está em uso.",
+  dados: "Preencha nome e telefone válidos.",
+  senha: "A nova senha deve ter pelo menos 8 caracteres, com letras e números.",
+  proprio: "Não pode retirar o seu próprio perfil de administrador nem desactivar a sua conta.",
+  ultimo: "Tem de existir pelo menos um administrador activo.",
+};
+
 export default async function EditarUtilizador({ params, searchParams }) {
   await exigir("admin");
   const id = Number(params.id);
@@ -24,9 +32,7 @@ export default async function EditarUtilizador({ params, searchParams }) {
         <h1>Editar utilizador</h1>
         <Link href="/admin" className="btn sec">Voltar</Link>
       </div>
-      {searchParams.erro === "dup" && <p className="erro">Esse telefone ou email já está em uso.</p>}
-      {searchParams.erro === "dados" && <p className="erro">Preencha nome e telefone.</p>}
-      {searchParams.erro === "senha" && <p className="erro">A nova senha deve ter pelo menos 6 caracteres.</p>}
+      {searchParams.erro && <p className="erro">{ERROS[searchParams.erro] || "Não foi possível guardar."}</p>}
 
       <form action={actualizarUtilizador} className="card">
         <input type="hidden" name="id" value={u.id} />
@@ -46,7 +52,11 @@ export default async function EditarUtilizador({ params, searchParams }) {
           ))}
         </div>
         <label>Nova senha (deixe em branco para manter)</label>
-        <input name="senha" type="text" minLength="6" />
+        <input name="senha" type="password" minLength="8" autoComplete="new-password" />
+        <p className="mut pequeno">
+          Ao definir uma senha nova, o utilizador é obrigado a mudá-la no próximo acesso e as sessões abertas são
+          terminadas.
+        </p>
         <label>
           <input type="checkbox" name="activo" defaultChecked={u.activo} /> Activo
         </label>
