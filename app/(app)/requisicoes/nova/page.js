@@ -10,6 +10,8 @@ const ERROS = {
   2: "Anexe pelo menos um documento (cotação, proforma ou foto) para submeter.",
   dados: "Verifique os valores: quantidades e preços têm de ser números válidos.",
   site: "Escolha um site a que tenha acesso.",
+  projeto: "Escolha um projeto activo.",
+  orcamento: "O valor estimado excede o orçamento disponível do projeto.",
   upload: "Não foi possível carregar o ficheiro. Verifique o tamanho (máx. 4 MB) e tente novamente.",
   tamanho: "O ficheiro tem mais de 4 MB. Reduza a foto ou o PDF e tente outra vez.",
   tipo: "Só são aceites ficheiros PDF, JPG ou PNG.",
@@ -17,7 +19,7 @@ const ERROS = {
 
 export default async function Nova({ searchParams }) {
   const s = await exigir("mestre");
-  const [sites, categorias, modelos, favoritos] = await Promise.all([
+    const [sites, categorias, modelos, favoritos, projetos, fornecedores] = await Promise.all([
     q(
       `SELECT st.id, st.nome FROM sites st
         WHERE st.activo AND (EXISTS (SELECT 1 FROM mestre_sites ms WHERE ms.mestre_id=$1 AND ms.site_id=st.id)
@@ -26,6 +28,8 @@ export default async function Nova({ searchParams }) {
       [s.id]
     ),
     q("SELECT id, nome FROM categorias ORDER BY nome"),
+    q("SELECT id, codigo, nome FROM projetos WHERE activo ORDER BY nome"),
+    q("SELECT id, nome FROM fornecedores WHERE activo ORDER BY nome"),
     q(
       `SELECT id, nome, mestre_id, partilhado, itens
          FROM modelos_requisicao
@@ -74,6 +78,16 @@ export default async function Nova({ searchParams }) {
           {sites.map((x) => <option key={x.id} value={x.id}>{x.nome}</option>)}
         </select>
 
+        <label>Projeto</label>
+        <select name="projeto_id">
+          <option value="">Sem projeto</option>
+          {projetos.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.codigo} — {p.nome}
+            </option>
+          ))}
+        </select>
+
         <label>Justificação</label>
         <textarea
           name="justificacao"
@@ -91,7 +105,7 @@ export default async function Nova({ searchParams }) {
         </select>
 
         <h2>Orçamento</h2>
-        <ItensForm categorias={categorias} iniciais={iniciais} favoritos={favoritos} />
+        <ItensForm categorias={categorias} iniciais={iniciais} favoritos={favoritos} fornecedores={fornecedores} />
 
         <h2>Documentos do orçamento</h2>
         <select name="tipo_anexo" defaultValue="cotacao">

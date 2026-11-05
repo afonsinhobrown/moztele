@@ -14,6 +14,7 @@ import { normalizarTelefone, telefoneValido } from "@/lib/telefone";
 import { demasiadasTentativas, registarTentativa } from "@/lib/limite";
 import { whatsappConfigurado, enviarWhatsapp } from "@/lib/whatsapp";
 import { erroInesperado } from "@/lib/log";
+import { auditar } from "@/lib/auditoria";
 
 const desdeSubmissao = `COALESCE((SELECT max(criado_em) FROM historico_estados WHERE requisicao_id=$1 AND estado_novo='submetido'),'-infinity')`;
 const ESTADOS_VALIDOS = ["rascunho", "submetido", "correccao_pedida", "aprovado", "reprovado", "dinheiro_enviado", "compra_comprovada", "fechado", "cancelado"];
@@ -93,6 +94,7 @@ function lerItens(formData) {
   const un = formData.getAll("unidade");
   const pr = formData.getAll("preco");
   const cat = formData.getAll("categoria_id");
+  const forn = formData.getAll("fornecedor_id");
   const itens = [];
   for (let i = 0; i < d.length; i++) {
     const descricao = String(d[i] || "").trim().slice(0, 255);
@@ -106,6 +108,7 @@ function lerItens(formData) {
       unidade: String(un[i] || "un").trim().slice(0, 20) || "un",
       preco,
       categoria: cat[i] ? Number(cat[i]) : null,
+      fornecedor: forn[i] ? Number(forn[i]) : null,
     });
   }
   return { itens, total: arred(itens.reduce((a, i) => a + i.quantidade * i.preco, 0)) };
@@ -261,6 +264,7 @@ export async function mudarSenha(formData) {
 export async function criarRequisicao(formData) {
   const s = await exigir("mestre");
   const site_id = Number(formData.get("site_id"));
+  const projeto_id = formData.get("projeto_id") ? Number(formData.get("projeto_id")) : null;
   const justificacao = String(formData.get("justificacao") || "").trim().slice(0, 2000);
   const urgencia = URGENCIAS.includes(String(formData.get("urgencia"))) ? String(formData.get("urgencia")) : "normal";
   const acao = formData.get("acao");
@@ -276,6 +280,20 @@ export async function criarRequisicao(formData) {
     [site_id, s.id]
   );
   if (!site) redirect("/requisicoes/nova?erro=site");
+
+  if (projeto_id) {
+    const p = await q1("SELECT id, orcamento_total, activo FROM projetos WHERE id=$1", [projeto_id]);
+    if (!p || !p.activo) redirect("/requisicoes/nova?erro=projeto");
+    const orcamento = Number(p.orcamento_total || 0);
+    if (orcamento > 0) {
+      const [consumido] = await q(
+        `SELECT COALESCE(sum(valor_estimado),0) AS v FROM requisicoes
+          WHERE projeto_id=$1 AND estado NOT IN ('rascunho','reprovado','cancelado')`,
+        [projeto_id]
+      );
+      if (Number(consumido.v) + total > orcamento) redirect("/requisicoes/nova?erro=orcamento");
+    }
+  }
 
   const tipo = String(formData.get("tipo_anexo") || "cotacao");
   const ficheiros = [];
@@ -299,15 +317,22 @@ export async function criarRequisicao(formData) {
   try {
     id = await tx(async (run) => {
       const [r] = await run(
-        `INSERT INTO requisicoes (mestre_id, site_id, justificacao, urgencia, valor_estimado, estado)
-         VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
-        [s.id, site_id, justificacao, urgencia, total, estado]
+        `INSERT INTO requisicoes (mestre_id, site_id, projeto_id, justificacao, urgencia, valor_estimado, estado)
+         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+        [s.id, site_id, projeto_id, justificacao, urgencia, total, estado]
       );
+      await auditar(run, {
+        tabela: "requisicoes",
+        operacao: "insert",
+        registroId: r.id,
+        utilizadorId: s.id,
+        detalhes: { site_id, projeto_id, justificacao, valor_estimado: total, estado },
+      });
       for (const i of itens)
         await run(
-          `INSERT INTO requisicao_itens (requisicao_id, categoria_id, descricao, quantidade, unidade, preco_unitario)
-           VALUES ($1,$2,$3,$4,$5,$6)`,
-          [r.id, i.categoria, i.descricao, i.quantidade, i.unidade, i.preco]
+          `INSERT INTO requisicao_itens (requisicao_id, categoria_id, descricao, quantidade, unidade, preco_unitario, fornecedor_id)
+           VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+          [r.id, i.categoria, i.descricao, i.quantidade, i.unidade, i.preco, i.fornecedor]
         );
       for (const f of ficheiros) {
         await registarFicheiro(run, f, { requisicaoId: r.id, finalidade: "orcamento", utilizadorId: s.id });
@@ -387,9 +412,9 @@ export async function editarItens(formData) {
     await run("DELETE FROM requisicao_itens WHERE requisicao_id=$1", [id]);
     for (const i of itens)
       await run(
-        `INSERT INTO requisicao_itens (requisicao_id, categoria_id, descricao, quantidade, unidade, preco_unitario)
-         VALUES ($1,$2,$3,$4,$5,$6)`,
-        [id, i.categoria, i.descricao, i.quantidade, i.unidade, i.preco]
+        `INSERT INTO requisicao_itens (requisicao_id, categoria_id, descricao, quantidade, unidade, preco_unitario, fornecedor_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [id, i.categoria, i.descricao, i.quantidade, i.unidade, i.preco, i.fornecedor]
       );
     await run("UPDATE requisicoes SET valor_estimado=$2 WHERE id=$1", [id, total]);
   }, s.id);
@@ -434,6 +459,20 @@ export async function submeter(formData) {
     );
     if (!r || !["rascunho", "correccao_pedida"].includes(r.estado)) return "estado";
     if (r.n === 0) return "sem-anexo";
+    if (r.projeto_id) {
+      const p = await run("SELECT orcamento_total, activo FROM projetos WHERE id=$1", [r.projeto_id]);
+      if (p[0] && p[0].activo) {
+        const orcamento = Number(p[0].orcamento_total || 0);
+        if (orcamento > 0) {
+          const [consumido] = await run(
+            `SELECT COALESCE(sum(valor_estimado),0) AS v FROM requisicoes
+              WHERE projeto_id=$1 AND id <> $2 AND estado NOT IN ('rascunho','reprovado','cancelado')`,
+            [r.projeto_id, id]
+          );
+          if (Number(consumido.v) + Number(r.valor_estimado) > orcamento) return "orcamento";
+        }
+      }
+    }
     await run("UPDATE requisicoes SET estado='submetido' WHERE id=$1", [id]);
     await aplicarCreditos(run, {
       requisicaoId: id,
@@ -1203,4 +1242,81 @@ export async function confirmarCobertura(formData) {
     redirect(`/requisicoes/${id}?erro=upload`);
   }
   redirect(`/requisicoes/${id}${resultado === "ok" ? "?ok=credito" : `?erro=${resultado}`}`);
+}
+
+/* ---------- Admin: projetos ---------- */
+
+export async function criarProjeto(formData) {
+  await exigir("admin");
+  const nome = String(formData.get("nome") || "").trim().slice(0, 150);
+  const area = formData.get("area_id") ? Number(formData.get("area_id")) : null;
+  const orcamento = valorValido(formData.get("orcamento_total")) ?? 0;
+  if (!nome) redirect("/admin/projetos?erro=dados");
+  await q1(
+    `INSERT INTO projetos (nome, area_id, orcamento_total) VALUES ($1,$2,$3)`,
+    [nome, area, orcamento]
+  );
+  redirect("/admin/projetos?ok=projeto");
+}
+
+export async function actualizarProjeto(formData) {
+  await exigir("admin");
+  const id = Number(formData.get("id"));
+  const nome = String(formData.get("nome") || "").trim().slice(0, 150);
+  const area = formData.get("area_id") ? Number(formData.get("area_id")) : null;
+  const orcamento = valorValido(formData.get("orcamento_total")) ?? 0;
+  const activo = formData.get("activo") === "on";
+  if (!id || !nome) redirect(`/admin/projetos/${id}?erro=dados`);
+  await q1(
+    `UPDATE projetos SET nome=$1, area_id=$2, orcamento_total=$3, activo=$4, actualizado_em=now() WHERE id=$5`,
+    [nome, area, orcamento, activo, id]
+  );
+  redirect("/admin/projetos?ok=projeto");
+}
+
+export async function alternarProjeto(formData) {
+  await exigir("admin");
+  const id = Number(formData.get("id"));
+  await q1("UPDATE projetos SET activo = NOT activo, actualizado_em=now() WHERE id=$1", [id]);
+  redirect("/admin/projetos?ok=projeto");
+}
+
+/* ---------- Admin: regras de aprovação ---------- */
+
+export async function criarRegraAprovacao(formData) {
+  await exigir("admin");
+  const valorMin = valorValido(formData.get("valor_min")) ?? 0;
+  const valorMaxRaw = String(formData.get("valor_max") || "").trim();
+  const valorMax = valorMaxRaw === "" ? null : valorValido(valorMaxRaw);
+  const n = Number(formData.get("aprovadores_necessarios") || 1);
+  if (!Number.isFinite(n) || n < 1) redirect("/admin/regras-aprovacao?erro=dados");
+  if (valorMax != null && valorMax <= valorMin) redirect("/admin/regras-aprovacao?erro=dados");
+  await q1(
+    `INSERT INTO regras_aprovacao (valor_min, valor_max, aprovadores_necessarios) VALUES ($1,$2,$3)`,
+    [valorMin, valorMax, n]
+  );
+  redirect("/admin/regras-aprovacao?ok=regra");
+}
+
+export async function actualizarRegraAprovacao(formData) {
+  await exigir("admin");
+  const id = Number(formData.get("id"));
+  const valorMin = valorValido(formData.get("valor_min")) ?? 0;
+  const valorMaxRaw = String(formData.get("valor_max") || "").trim();
+  const valorMax = valorMaxRaw === "" ? null : valorValido(valorMaxRaw);
+  const n = Number(formData.get("aprovadores_necessarios") || 1);
+  if (!id || !Number.isFinite(n) || n < 1) redirect(`/admin/regras-aprovacao/${id}?erro=dados`);
+  if (valorMax != null && valorMax <= valorMin) redirect(`/admin/regras-aprovacao/${id}?erro=dados`);
+  await q1(
+    `UPDATE regras_aprovacao SET valor_min=$1, valor_max=$2, aprovadores_necessarios=$3 WHERE id=$4`,
+    [valorMin, valorMax, n, id]
+  );
+  redirect("/admin/regras-aprovacao?ok=regra");
+}
+
+export async function removerRegraAprovacao(formData) {
+  await exigir("admin");
+  const id = Number(formData.get("id"));
+  if (id) await q1("DELETE FROM regras_aprovacao WHERE id=$1", [id]);
+  redirect("/admin/regras-aprovacao?ok=regra");
 }

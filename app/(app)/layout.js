@@ -22,7 +22,16 @@ export default async function AppLayout({ children }) {
             {["admin", "financeiro", "aprovador"].includes(s.perfil) && (
               <Link href="/relatorios/requisicoes">Relatórios</Link>
             )}
-            {s.perfil === "admin" && <Link href="/admin">Admin</Link>}
+            {s.perfil === "admin" && (
+              <>
+                <Link href="/admin">Admin</Link>
+                <Link href="/admin/projetos">Projectos</Link>
+                <Link href="/admin/regras-aprovacao">Regras de aprovação</Link>
+              </>
+            )}
+            {["admin", "financeiro"].includes(s.perfil) && (
+              <Link href="/prestacao-contas">Prestação de contas</Link>
+            )}
             <Link href="/notificacoes">
               Avisos{n > 0 && <span className="pill">{n}</span>}
             </Link>

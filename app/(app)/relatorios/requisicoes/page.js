@@ -16,11 +16,11 @@ const queryString = (obj) => {
 export default async function RelatorioRequisicoes({ searchParams }) {
   const s = await exigir("admin", "financeiro", "aprovador");
   const pagina = Math.max(1, Number(searchParams.pagina) || 1);
-  const { rows, n, total, sites, filtros, paginas } = await dadosRelatorioRequisicoes(searchParams, s.perfil, {
+  const { rows, n, total, sites, projetos, filtros, paginas } = await dadosRelatorioRequisicoes(searchParams, s.perfil, {
     limite: POR_PAGINA,
     offset: (pagina - 1) * POR_PAGINA,
   });
-  const { estado, de, ate, mestre, site, urgencia, texto } = filtros;
+  const { estado, de, ate, mestre, site, projeto, urgencia, texto } = filtros;
   const pdf = `/api/relatorios/requisicoes/pdf${queryString(filtros)}`;
   const csv = `/api/relatorios/requisicoes/csv${queryString(filtros)}`;
   const linkPagina = (p) => `/relatorios/requisicoes${queryString({ ...filtros, pagina: p })}`;
@@ -33,6 +33,7 @@ export default async function RelatorioRequisicoes({ searchParams }) {
           <a href={pdf} className="btn pri" target="_blank" rel="noreferrer">Gerar PDF</a>
           <a href={csv} className="btn sec">Exportar CSV</a>
           <Link href="/relatorios/financeiro" className="btn sec">Relatório financeiro</Link>
+          <Link href="/relatorios/projetos" className="btn sec">Relatório por projecto</Link>
         </div>
       </div>
 
@@ -59,6 +60,12 @@ export default async function RelatorioRequisicoes({ searchParams }) {
             <select name="site" defaultValue={site || ""}>
               <option value="">Todos</option>
               {sites.map((x) => <option key={x.id} value={x.id}>{x.nome}</option>)}
+            </select>
+          </div>
+          <div><label>Projecto</label>
+            <select name="projeto" defaultValue={projeto || ""}>
+              <option value="">Todos</option>
+              {projetos.map((x) => <option key={x.id} value={x.id}>{x.codigo} — {x.nome}</option>)}
             </select>
           </div>
           <div><label>Código / justificação</label><input name="texto" defaultValue={texto || ""} placeholder="REQ-… ou texto" /></div>

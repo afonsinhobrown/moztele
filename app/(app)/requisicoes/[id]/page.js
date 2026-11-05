@@ -200,7 +200,7 @@ export default async function Detalhe({ params, searchParams }) {
           </summary>
           <form action={editarItens} style={{ marginTop: 12 }}>
             <Hidden id={id} />
-            <ItensForm categorias={categorias} iniciais={itens} />
+            <ItensForm categorias={categorias} iniciais={itens} fornecedores={fornecedores} />
             <Btn className="pri">Guardar itens</Btn>
           </form>
         </details>

@@ -1,16 +1,17 @@
 "use client";
 import { useState } from "react";
 
-const vazio = { d: "", qtd: 1, un: "un", pr: "", cat: "" };
+const vazio = { d: "", qtd: 1, un: "un", pr: "", cat: "", forn: "" };
 const normalizar = (i) => ({
   d: i.descricao || "",
   qtd: i.quantidade ?? 1,
   un: i.unidade || "un",
   pr: i.preco_unitario ?? "",
   cat: i.categoria_id ? String(i.categoria_id) : "",
+  forn: i.fornecedor_id ? String(i.fornecedor_id) : "",
 });
 
-export default function ItensForm({ categorias, iniciais = [], favoritos = [] }) {
+export default function ItensForm({ categorias, iniciais = [], favoritos = [], fornecedores = [] }) {
   const [rows, setRows] = useState(iniciais.length ? iniciais.map(normalizar) : [{ ...vazio }]);
   const [favSel, setFavSel] = useState("");
   const set = (i, k, v) => setRows((r) => r.map((x, j) => (j === i ? { ...x, [k]: v } : x)));
@@ -30,6 +31,7 @@ export default function ItensForm({ categorias, iniciais = [], favoritos = [] })
         un: f.unidade || "un",
         pr: f.preco_unitario ?? "",
         cat: f.categoria_id ? String(f.categoria_id) : "",
+        forn: "",
       },
     ]);
     setFavSel("");
@@ -65,6 +67,12 @@ export default function ItensForm({ categorias, iniciais = [], favoritos = [] })
           <input name="quantidade" type="number" step="0.01" min="0.01" placeholder="Qtd" value={x.qtd} onChange={(e) => set(i, "qtd", e.target.value)} />
           <input name="unidade" placeholder="Un." value={x.un} onChange={(e) => set(i, "un", e.target.value)} />
           <input name="preco" inputMode="decimal" placeholder="Preço unit. (MZN)" value={x.pr} onChange={(e) => set(i, "pr", e.target.value)} />
+          <select name="fornecedor_id" value={x.forn} onChange={(e) => set(i, "forn", e.target.value)}>
+            <option value="">Fornecedor</option>
+            {fornecedores.map((f) => (
+              <option key={f.id} value={f.id}>{f.nome}</option>
+            ))}
+          </select>
           <button type="button" className="link" disabled={rows.length === 1} onClick={() => setRows((r) => r.filter((_, j) => j !== i))}>✕</button>
         </div>
       ))}
