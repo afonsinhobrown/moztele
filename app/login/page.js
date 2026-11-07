@@ -21,6 +21,9 @@ export default function Login({ searchParams }) {
           <span className="mut">Sistema de requisições</span>
         </Link>
         {searchParams.erro && <p className="erro">{ERROS[searchParams.erro] || "Não foi possível entrar."}</p>}
+        {searchParams.ok === "senha" && (
+          <p className="aviso">Senha definida. Já pode entrar com a senha nova.</p>
+        )}
         {searchParams.de && <input type="hidden" name="de" value={searchParams.de} />}
         <label>Telefone</label>
         <input
@@ -34,6 +37,9 @@ export default function Login({ searchParams }) {
         <label>Senha</label>
         <input name="senha" type="password" autoComplete="current-password" required />
         <Btn className="pri largo">Entrar</Btn>
+        <p className="mut centro pequeno">
+          Esqueceu-se da senha? <Link href="/recuperar">Peça um código de recuperação</Link> ao administrador.
+        </p>
         <p className="mut centro">Acesso reservado a mestres, aprovadores, financeiro e administração.</p>
 
         {mostrarTeste && (

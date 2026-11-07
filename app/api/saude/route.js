@@ -23,7 +23,7 @@ export async function GET() {
       baseDados,
       armazenamento,
       whatsapp,
-      versao: "1.1.0",
+      versao: "1.2.0",
       hora: new Date().toISOString(),
     },
     { status: tudo ? 200 : 503, headers: { "cache-control": "no-store" } }

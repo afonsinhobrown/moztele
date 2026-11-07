@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 
-const PUBLICOS = new Set(["/", "/login", "/api/saude", "/icon.svg"]);
+const PUBLICOS = new Set(["/", "/login", "/login/2fa", "/recuperar", "/api/saude", "/icon.svg"]);
 const ESTATICOS = [/^\/_next\//, /^\/favicon\.ico$/, /^\/uploads\//];
 
 const chave = () => {

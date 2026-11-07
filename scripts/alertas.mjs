@@ -2,7 +2,7 @@
 // Uso: npm run alertas   — pode ser chamado por um cron da Vercel.
 import pg from "pg";
 import { LIMITES } from "../lib/prazos.js";
-import { enviarWhatsapp, whatsappConfigurado } from "../lib/whatsapp.js";
+import { enviarAlerta, whatsappConfigurado } from "../lib/whatsapp.js";
 
 const url = process.env.DATABASE_URL;
 if (!url) {
@@ -58,7 +58,7 @@ try {
         );
         const tel = await pool.query("SELECT telefone FROM utilizadores WHERE id=$1", [d.id]);
         if (whatsappConfigurado() && tel.rows[0]?.telefone) {
-          await enviarWhatsapp(tel.rows[0].telefone, `Moz Teles: ${mensagem}`).catch((e) =>
+          await enviarAlerta(tel.rows[0].telefone, mensagem).catch((e) =>
             console.error("WhatsApp:", e.message)
           );
         }

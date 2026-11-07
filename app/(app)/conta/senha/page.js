@@ -20,9 +20,14 @@ export default async function ContaSenha({ searchParams }) {
       <div className="linha">
         <h1>{s.deve_mudar_senha ? "Defina a sua nova senha" : "Mudar senha"}</h1>
         {!s.deve_mudar_senha && (
-          <Link href="/requisicoes" className="btn sec">
-            Voltar
-          </Link>
+          <div className="acoes">
+            <Link href="/conta/seguranca" className="btn sec">
+              Segurança e avisos
+            </Link>
+            <Link href="/requisicoes" className="btn sec">
+              Voltar
+            </Link>
+          </div>
         )}
       </div>
 

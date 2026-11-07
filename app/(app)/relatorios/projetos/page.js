@@ -24,6 +24,13 @@ export default async function RelatorioProjetos({ searchParams }) {
       <h1>Relatório por projecto</h1>
       <div className="linha">
         <div className="acoes">
+          <a href={`/api/relatorios/projetos/pdf${qs.toString() ? `?${qs}` : ""}`} className="btn pri" target="_blank" rel="noreferrer">
+            PDF
+          </a>
+          <a href={`/api/relatorios/projetos/csv${qs.toString() ? `?${qs}` : ""}`} className="btn sec">
+            CSV
+          </a>
+          <Link href="/relatorios/financeiro" className="btn sec">Relatório financeiro</Link>
           <Link href={`/relatorios/projetos${qs.toString() ? `?${qs}` : ""}`} className="btn sec">Limpar</Link>
         </div>
       </div>

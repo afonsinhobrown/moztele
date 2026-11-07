@@ -34,6 +34,10 @@ export async function GET(req, { params }) {
   resumo(st, [
     { rotulo: "Mestre", valor: `${r.mestre} (${r.telefone})` },
     { rotulo: "Site", valor: r.site },
+    {
+      rotulo: "Projeto",
+      valor: r.projeto_codigo ? `${r.projeto_codigo} - ${r.projeto_nome}` : "Sem projeto",
+    },
     { rotulo: "Urgência", valor: URGENCIAS[r.urgencia] || r.urgencia },
     { rotulo: "Valor estimado", valor: money(r.valor_estimado) },
   ]);

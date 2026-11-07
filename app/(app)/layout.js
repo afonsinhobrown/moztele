@@ -18,7 +18,11 @@ export default async function AppLayout({ children }) {
             <Link href="/requisicoes">Requisições</Link>
             {s.perfil === "mestre" && <Link href="/requisicoes/nova">Nova</Link>}
             {s.perfil === "mestre" && <Link href="/modelos">Modelos</Link>}
+            {s.perfil === "aprovador" && <Link href="/delegacoes">Delegações</Link>}
             <Link href="/inventario">Inventário</Link>
+            {["mestre", "financeiro", "admin"].includes(s.perfil) && (
+              <Link href="/creditos">Saldo</Link>
+            )}
             {["admin", "financeiro", "aprovador"].includes(s.perfil) && (
               <Link href="/relatorios/requisicoes">Relatórios</Link>
             )}
@@ -27,6 +31,7 @@ export default async function AppLayout({ children }) {
                 <Link href="/admin">Admin</Link>
                 <Link href="/admin/projetos">Projectos</Link>
                 <Link href="/admin/regras-aprovacao">Regras de aprovação</Link>
+                <Link href="/admin/auditoria">Auditoria</Link>
               </>
             )}
             {["admin", "financeiro"].includes(s.perfil) && (

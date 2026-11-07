@@ -169,3 +169,15 @@ button.link{border:0;background:none;color:inherit;padding:0;text-decoration:und
 .credenciais-teste th,.credenciais-teste td{padding:4px 5px;border-bottom:1px solid #f1e6cd;white-space:nowrap}
 .credenciais-teste th{font-size:10px}
 .credenciais-teste code{background:#f4f6f9;border-radius:4px;padding:1px 4px;font-size:11px}
+/* Detalhes de auditoria */
+.json{margin:6px 0 0;padding:10px;max-height:260px;overflow:auto;background:#0f172a;color:#e2e8f0;border-radius:8px;font-size:11.5px;line-height:1.45}
+details>summary{cursor:pointer}
+
+
+/* Codigo de recuperacao */
+.codigo{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:26px;letter-spacing:4px;font-weight:700;color:#0f3d6e;background:#eef4fb;border:1px dashed #b9cde4;border-radius:12px;padding:14px 18px;text-align:center;margin:10px 0}
+
+
+/* Checkbox em linha */
+label.chek{display:inline-flex;align-items:center;gap:6px;margin:0;font-weight:600;font-size:13px;color:#46586c;white-space:nowrap}
+

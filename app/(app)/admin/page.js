@@ -1,7 +1,14 @@
 import Link from "next/link";
 import { exigir } from "@/lib/auth";
 import { q } from "@/lib/db";
-import { criarUtilizador, criarSite, alternarUtilizador, criarFornecedor } from "@/app/actions";
+import {
+  criarUtilizador,
+  criarSite,
+  actualizarSite,
+  alternarUtilizador,
+  criarFornecedor,
+  actualizarFornecedor,
+} from "@/app/actions";
 import Btn from "@/components/Btn";
 
 const ERROS = {
@@ -29,7 +36,13 @@ export default async function Admin({ searchParams }) {
   ]);
   return (
     <>
-      <h1>Administração</h1>
+      <div className="linha">
+        <h1>Administração</h1>
+        <div className="acoes">
+          <Link href="/admin/catalogos" className="btn sec">Áreas e categorias</Link>
+          <Link href="/admin/auditoria" className="btn sec">Auditoria</Link>
+        </div>
+      </div>
       {searchParams.erro && <p className="erro">{ERROS[searchParams.erro] || "Não foi possível guardar."}</p>}
       {searchParams.ok && <p className="aviso">{OK[searchParams.ok] || "Guardado."}</p>}
 
@@ -41,7 +54,37 @@ export default async function Admin({ searchParams }) {
         <select name="area_id">{areas.map((a) => <option key={a.id} value={a.id}>{a.nome}</option>)}</select>
         <Btn className="pri">Adicionar site</Btn>
       </form>
-      <div className="card"><ul>{sites.map((x) => <li key={x.id}>{x.nome} · {x.area} {x.cidade ? `· ${x.cidade}` : ""}</li>)}</ul></div>
+      <div className="card tabela">
+        <table>
+          <thead>
+            <tr><th>Nome</th><th>Província</th><th>Cidade</th><th>Área</th><th>Activo</th><th></th></tr>
+          </thead>
+          <tbody>
+            {sites.length === 0 && <tr><td colSpan="6" className="mut">Ainda sem sites.</td></tr>}
+            {sites.map((x) => (
+              <tr key={x.id}>
+                <td colSpan="6">
+                  <form action={actualizarSite} className="inline">
+                    <input type="hidden" name="id" value={x.id} />
+                    <input name="nome" defaultValue={x.nome} required aria-label="Nome do site" />
+                    <input name="provincia" defaultValue={x.provincia || ""} placeholder="Província" aria-label="Província" />
+                    <input name="cidade" defaultValue={x.cidade || ""} placeholder="Cidade" aria-label="Cidade" />
+                    <select name="area_id" defaultValue={x.area_id} aria-label="Área">
+                      {areas.map((a) => (
+                        <option key={a.id} value={a.id}>{a.nome}</option>
+                      ))}
+                    </select>
+                    <label className="chek">
+                      <input type="checkbox" name="activo" defaultChecked={x.activo} /> activo
+                    </label>
+                    <button className="link">Guardar</button>
+                  </form>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
 
       <h2>Utilizadores</h2>
       <form action={criarUtilizador} className="card">
@@ -84,11 +127,24 @@ export default async function Admin({ searchParams }) {
       </form>
       <div className="card tabela">
         <table>
-          <thead><tr><th>Fornecedor</th><th>Contacto</th><th>NUIT</th></tr></thead>
+          <thead><tr><th>Fornecedor</th><th>Contacto</th><th>NUIT</th><th>Activo</th><th></th></tr></thead>
           <tbody>
-            {fornecedores.length === 0 && <tr><td colSpan="3" className="mut">Ainda sem fornecedores (opcional).</td></tr>}
+            {fornecedores.length === 0 && <tr><td colSpan="5" className="mut">Ainda sem fornecedores (opcional).</td></tr>}
             {fornecedores.map((f) => (
-              <tr key={f.id}><td>{f.nome}</td><td>{f.contacto || "—"}</td><td>{f.nuit || "—"}</td></tr>
+              <tr key={f.id}>
+                <td colSpan="5">
+                  <form action={actualizarFornecedor} className="inline">
+                    <input type="hidden" name="id" value={f.id} />
+                    <input name="nome" defaultValue={f.nome} required aria-label="Nome do fornecedor" />
+                    <input name="contacto" defaultValue={f.contacto || ""} placeholder="Contacto" aria-label="Contacto" />
+                    <input name="nuit" defaultValue={f.nuit || ""} placeholder="NUIT" aria-label="NUIT" />
+                    <label className="chek">
+                      <input type="checkbox" name="activo" defaultChecked={f.activo} /> activo
+                    </label>
+                    <button className="link">Guardar</button>
+                  </form>
+                </td>
+              </tr>
             ))}
           </tbody>
         </table>

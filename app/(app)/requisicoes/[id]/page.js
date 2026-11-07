@@ -42,6 +42,7 @@ const ERROS = {
   credito: "O saldo abatido ainda não cobre o valor estimado.",
   stock: "Não foi possível dar entrada no stock (já foi feito ou não há itens).",
   modelo: "Indique um nome para o modelo.",
+  limite: "Demasiadas acções seguidas. Aguarde um minuto e tente outra vez.",
 };
 
 const Hidden = ({ id }) => <input type="hidden" name="id" value={id} />;
@@ -61,7 +62,7 @@ export default async function Detalhe({ params, searchParams }) {
   const id = Number(params.id);
   const dados = await obterRequisicao(id, s);
   if (!dados) notFound();
-  const { r, itens, anexos, aprov, pags, compras, acerto, hist, coment, votou, reembolsos, aprovacao, creditos, stockEntrada } = dados;
+  const { r, itens, anexos, aprov, pags, compras, acerto, hist, coment, votou, reembolsos, aprovacao, creditos, delegandoPor, stockEntrada } = dados;
 
   const [categorias, fornecedores] = await Promise.all([
     q("SELECT id, nome FROM categorias ORDER BY nome"),
@@ -114,6 +115,11 @@ export default async function Detalhe({ params, searchParams }) {
       <div className="card">
         <p>
           <b>Mestre:</b> {r.mestre} ({r.telefone}) · <b>Site:</b> {r.site} · <b>Urgência:</b> {r.urgencia}
+          {r.projeto_codigo ? (
+            <>
+              {" "}· <b>Projeto:</b> {r.projeto_codigo} — {r.projeto_nome}
+            </>
+          ) : null}
         </p>
         <p>
           <b>Justificação:</b> {r.justificacao}
@@ -239,6 +245,7 @@ export default async function Detalhe({ params, searchParams }) {
             {aprov.map((a) => (
               <p key={a.id}>
                 <b>{a.aprovador}</b>: {a.decisao}
+                {a.delegado_por ? ` (por delegação: ${a.delegado_por})` : ""}
                 {a.motivo ? ` — ${a.motivo}` : ""} <span className="mut">({dt(a.decidido_em)})</span>
               </p>
             ))}
@@ -249,6 +256,12 @@ export default async function Detalhe({ params, searchParams }) {
       {s.perfil === "aprovador" && e === "submetido" && votou.length === 0 && (
         <form action={decidir} className="card">
           <h2>A sua decisão</h2>
+          {delegandoPor.length > 0 && (
+            <p className="aviso-inline">
+              <b>Delegação activa:</b> está a decidir em nome de{" "}
+              {delegandoPor.map((d) => d.de_nome).join(", ")}.
+            </p>
+          )}
           <Hidden id={id} />
           <select name="decisao" required>
             <option value="aprovado">Aprovar</option>

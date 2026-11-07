@@ -1,13 +1,14 @@
 {
   "name": "moztele",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test": "node --test tests/",
+    "test": "node scripts/testes.mjs",
+    "test:db": "node --env-file=.env.local scripts/testes.mjs tests/integration",
     "migrar": "node --env-file=.env.local scripts/migrar.mjs",
     "criar-admin": "node --env-file=.env.local scripts/criar-admin.mjs",
     "criar-testes": "node --env-file=.env.local scripts/criar-testes.mjs",

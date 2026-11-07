@@ -8,8 +8,23 @@ on:
 jobs:
   testes:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: moztele
+          POSTGRES_PASSWORD: moztele
+          POSTGRES_DB: moztele
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U moztele"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
     env:
       AUTH_SECRET: "segredo-de-teste-com-mais-de-24-caracteres"
+      DATABASE_URL: "postgresql://moztele:moztele@localhost:5432/moztele?sslmode=disable"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -17,7 +32,14 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
-      - name: Testes unitários
+      - name: Esquema e migrações
+        run: |
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/schema.sql
+          for f in db/migrations/*.sql; do
+            echo "a aplicar $f"
+            psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"
+          done
+      - name: Testes unitários e de integração
         run: npm test
       - name: Build de produção
         run: npm run build

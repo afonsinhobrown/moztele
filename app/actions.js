@@ -3,7 +3,7 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import bcrypt from "bcryptjs";
 import { q, q1, tx } from "@/lib/db";
-import { criarSessao, terminarSessao, exigir, sessaoActiva } from "@/lib/auth";
+import { criarSessao, terminarSessao, exigir, sessaoActiva, criarSessaoPendente, sessaoPendente, terminarSessaoPendente } from "@/lib/auth";
 import { guardar, apagarFicheiroGuardado } from "@/lib/upload";
 import { ErroFicheiro, FINALIDADES_FINANCEIRAS } from "@/lib/ficheiros";
 import { arred, num, quantidadeValida, valorPositivo, valorValido } from "@/lib/num";
@@ -12,9 +12,13 @@ import { TIPOS_MOVIMENTO, calcularMovimento } from "@/lib/stock";
 import { errosSenha } from "@/lib/senha";
 import { normalizarTelefone, telefoneValido } from "@/lib/telefone";
 import { demasiadasTentativas, registarTentativa } from "@/lib/limite";
-import { whatsappConfigurado, enviarWhatsapp } from "@/lib/whatsapp";
+import { limitar } from "@/lib/acoes";
+import { enviarAlerta, whatsappConfigurado } from "@/lib/whatsapp";
+import { emailConfigurado, enviarEmail } from "@/lib/email";
+import { enviarSms, smsConfigurado } from "@/lib/sms";
 import { erroInesperado } from "@/lib/log";
-import { auditar } from "@/lib/auditoria";
+import { VALIDADE_HORAS, codigoIgual, gerarCodigo, hashCodigo } from "@/lib/codigos";
+import { gerarSegredo, verificarTotp } from "@/lib/totp";
 
 const desdeSubmissao = `COALESCE((SELECT max(criado_em) FROM historico_estados WHERE requisicao_id=$1 AND estado_novo='submetido'),'-infinity')`;
 const ESTADOS_VALIDOS = ["rascunho", "submetido", "correccao_pedida", "aprovado", "reprovado", "dinheiro_enviado", "compra_comprovada", "fechado", "cancelado"];
@@ -30,11 +34,17 @@ async function idsPerfil(run, perfil) {
   return rows.map((r) => r.id);
 }
 
+async function chefiaDe(run, mestreId) {
+  const [c] = await run("SELECT chefia_id FROM utilizadores WHERE id=$1", [mestreId]);
+  return c?.chefia_id || null;
+}
+
 async function notificar(run, ids, reqId, msg) {
   const unicos = [...new Set((ids || []).filter(Boolean).map(Number).filter(Number.isFinite))];
   if (!unicos.length) return;
   const users = await run(
-    "SELECT id, telefone, nome FROM utilizadores WHERE id = ANY($1::bigint[]) AND activo",
+    `SELECT id, telefone, email, nome, notificar_email, notificar_sms
+       FROM utilizadores WHERE id = ANY($1::bigint[]) AND activo`,
     [unicos]
   );
   for (const u of users)
@@ -42,15 +52,30 @@ async function notificar(run, ids, reqId, msg) {
       "INSERT INTO notificacoes (utilizador_id, requisicao_id, canal, mensagem) VALUES ($1,$2,'app',$3)",
       [u.id, reqId, msg]
     );
-  if (!whatsappConfigurado()) return;
-  // Aviso fora da app é "best effort": nunca deve fazer falhar a acção principal.
-  await Promise.allSettled(
-    users.map((u) =>
-      enviarWhatsapp(u.telefone, `Moz Teles: ${msg}`).catch((e) =>
-        erroInesperado("Aviso WhatsApp", e, { utilizador: u.id })
-      )
-    )
-  );
+
+  // Avisos fora da app são "best effort": nunca devem fazer falhar a acção principal.
+  const envios = [];
+  for (const u of users) {
+    if (whatsappConfigurado() && u.telefone)
+      envios.push(
+        enviarAlerta(u.telefone, `Moz Teles: ${msg}`).catch((e) =>
+          erroInesperado("Aviso WhatsApp", e, { utilizador: u.id })
+        )
+      );
+    if (emailConfigurado() && u.email && u.notificar_email)
+      envios.push(
+        enviarEmail({ para: u.email, assunto: "Moz Teles", texto: msg }).catch((e) =>
+          erroInesperado("Aviso email", e, { utilizador: u.id })
+        )
+      );
+    if (smsConfigurado() && u.telefone && u.notificar_sms)
+      envios.push(
+        enviarSms(u.telefone, `Moz Teles: ${msg}`).catch((e) =>
+          erroInesperado("Aviso SMS", e, { utilizador: u.id })
+        )
+      );
+  }
+  if (envios.length) await Promise.allSettled(envios);
 }
 
 async function registarFicheiro(run, f, { requisicaoId, finalidade, utilizadorId }) {
@@ -200,7 +225,8 @@ export async function login(formData) {
   let u = null;
   try {
     u = await q1(
-      `SELECT u.id, u.nome, u.senha_hash, u.activo, u.deve_mudar_senha, u.sessao_versao, p.nome AS perfil
+      `SELECT u.id, u.nome, u.telefone, u.senha_hash, u.activo, u.deve_mudar_senha, u.sessao_versao,
+              u.totp_ativo, p.nome AS perfil
          FROM utilizadores u JOIN perfis p ON p.id = u.perfil_id
         WHERE u.telefone = $1`,
       [telefone]
@@ -214,6 +240,12 @@ export async function login(formData) {
   await registarTentativa(telefone, ip, senhaOk);
   if (!senhaOk) redirect("/login?erro=1");
 
+  // Com dois factores ligados, a senha sozinha não abre a sessão.
+  if (u.totp_ativo) {
+    await criarSessaoPendente({ id: u.id, telefone: u.telefone });
+    redirect("/login/2fa");
+  }
+
   await q1("UPDATE utilizadores SET ultimo_acesso = now(), falhas_login = 0 WHERE id = $1", [u.id]);
   await criarSessao(u);
   if (u.deve_mudar_senha) redirect("/conta/senha");
@@ -224,6 +256,34 @@ export async function login(formData) {
 export async function logout() {
   terminarSessao();
   redirect("/login");
+}
+
+// Segundo passo do login: código do autenticador.
+export async function verificar2fa(formData) {
+  const codigo = String(formData.get("codigo") || "");
+  const p = await sessaoPendente();
+  if (!p?.id) redirect("/login?erro=1");
+
+  const ip = ipPedido();
+  const telefone = String(p.telefone || "");
+  if (await demasiadasTentativas(telefone, ip)) redirect("/login/2fa?erro=limite");
+
+  const u = await q1(
+    `SELECT u.id, u.nome, u.activo, u.deve_mudar_senha, u.sessao_versao,
+            u.totp_secret, u.totp_ativo, p.nome AS perfil
+       FROM utilizadores u JOIN perfis p ON p.id = u.perfil_id
+      WHERE u.id = $1`,
+    [p.id]
+  );
+  const ok = Boolean(u && u.activo && u.totp_ativo && verificarTotp(u.totp_secret, codigo));
+  await registarTentativa(telefone, ip, ok);
+  if (!ok) redirect("/login/2fa?erro=1");
+
+  terminarSessaoPendente();
+  await q1("UPDATE utilizadores SET ultimo_acesso = now(), falhas_login = 0 WHERE id = $1", [u.id]);
+  await criarSessao(u);
+  if (u.deve_mudar_senha) redirect("/conta/senha");
+  redirect("/requisicoes");
 }
 
 export async function mudarSenha(formData) {
@@ -259,10 +319,115 @@ export async function mudarSenha(formData) {
   redirect("/requisicoes?ok=senha");
 }
 
+/* ---------- Segundo factor ---------- */
+
+export async function iniciar2fa() {
+  const s = await exigir();
+  const u = await q1("SELECT totp_secret, totp_ativo FROM utilizadores WHERE id=$1", [s.id]);
+  if (!u || u.totp_ativo) redirect("/conta/seguranca");
+  const segredo = u.totp_secret || gerarSegredo();
+  await tx(
+    (run) => run("UPDATE utilizadores SET totp_secret=$1, totp_ativo=FALSE WHERE id=$2", [segredo, s.id]),
+    s.id
+  );
+  redirect("/conta/seguranca");
+}
+
+export async function confirmar2fa(formData) {
+  const s = await exigir();
+  const u = await q1("SELECT totp_secret, totp_ativo FROM utilizadores WHERE id=$1", [s.id]);
+  if (!u?.totp_secret || u.totp_ativo) redirect("/conta/seguranca?erro=estado");
+  if (!verificarTotp(u.totp_secret, formData.get("codigo"))) redirect("/conta/seguranca?erro=codigo");
+  await tx(
+    (run) => run("UPDATE utilizadores SET totp_ativo=TRUE, totp_criado_em=now() WHERE id=$1", [s.id]),
+    s.id
+  );
+  redirect("/conta/seguranca?ok=activo");
+}
+
+export async function desactivar2fa(formData) {
+  const s = await exigir();
+  const u = await q1("SELECT senha_hash, totp_secret, totp_ativo FROM utilizadores WHERE id=$1", [s.id]);
+  if (!u?.totp_ativo) redirect("/conta/seguranca?erro=estado");
+
+  const senha = String(formData.get("senha") || "");
+  const senhaOk = senha ? await bcrypt.compare(senha, u.senha_hash) : false;
+  const codigoOk = verificarTotp(u.totp_secret, formData.get("codigo"));
+  if (!senhaOk && !codigoOk) redirect("/conta/seguranca?erro=autenticacao");
+
+  await tx(
+    (run) => run("UPDATE utilizadores SET totp_ativo=FALSE, totp_secret=NULL WHERE id=$1", [s.id]),
+    s.id
+  );
+  redirect("/conta/seguranca?ok=desactivado");
+}
+
+export async function actualizarPreferenciasAvisos(formData) {
+  const s = await exigir();
+  const email = formData.get("notificar_email") === "on";
+  const sms = formData.get("notificar_sms") === "on";
+  await tx(
+    (run) =>
+      run("UPDATE utilizadores SET notificar_email=$1, notificar_sms=$2 WHERE id=$3", [email, sms, s.id]),
+    s.id
+  );
+  redirect("/conta/seguranca?ok=avisos");
+}
+
+/* ---------- Recuperação de senha ---------- */
+
+const ipPedido = () =>
+  headers().get("x-forwarded-for")?.split(",")[0]?.trim() ||
+  headers().get("x-real-ip") ||
+  "desconhecido";
+
+// Sem sessão: telefone + código emitido pelo administrador + senha nova.
+export async function redefinirComCodigo(formData) {
+  const telefone = normalizarTelefone(formData.get("telefone"));
+  const codigo = String(formData.get("codigo") || "");
+  const nova = String(formData.get("nova") || "");
+  const confirmar = String(formData.get("confirmar") || "");
+  const ip = ipPedido();
+
+  if (!telefoneValido(telefone) || !codigo) redirect("/recuperar?erro=dados");
+  if (nova !== confirmar) redirect("/recuperar?erro=confirma");
+  if (errosSenha(nova).length) redirect("/recuperar?erro=fraca");
+  if (await demasiadasTentativas(telefone, ip)) redirect("/recuperar?erro=limite");
+
+  const u = await q1("SELECT id, activo FROM utilizadores WHERE telefone=$1", [telefone]);
+  const c = u
+    ? await q1(
+        `SELECT id, codigo_hash FROM codigos_recuperacao
+          WHERE utilizador_id=$1 AND usado_em IS NULL AND expira_em > now()
+          ORDER BY id DESC LIMIT 1`,
+        [u.id]
+      )
+    : null;
+
+  if (!u || !u.activo || !c || !codigoIgual(codigo, c.codigo_hash)) {
+    await registarTentativa(telefone, ip, false);
+    redirect("/recuperar?erro=1");
+  }
+
+  const hash = await bcrypt.hash(nova, 12);
+  await tx(async (run) => {
+    await run(
+      `UPDATE utilizadores
+          SET senha_hash=$1, deve_mudar_senha=FALSE, sessao_versao = sessao_versao + 1, falhas_login=0
+        WHERE id=$2`,
+      [hash, u.id]
+    );
+    await run("UPDATE codigos_recuperacao SET usado_em = now() WHERE utilizador_id=$1 AND usado_em IS NULL", [u.id]);
+  }, u.id);
+  await registarTentativa(telefone, ip, true);
+  redirect("/login?ok=senha");
+}
+
 /* ---------- Mestre ---------- */
 
 export async function criarRequisicao(formData) {
   const s = await exigir("mestre");
+  if (!(await limitar(s, "criar-requisicao", 20, 60))) redirect("/requisicoes/nova?erro=limite");
   const site_id = Number(formData.get("site_id"));
   const projeto_id = formData.get("projeto_id") ? Number(formData.get("projeto_id")) : null;
   const justificacao = String(formData.get("justificacao") || "").trim().slice(0, 2000);
@@ -321,13 +486,6 @@ export async function criarRequisicao(formData) {
          VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
         [s.id, site_id, projeto_id, justificacao, urgencia, total, estado]
       );
-      await auditar(run, {
-        tabela: "requisicoes",
-        operacao: "insert",
-        registroId: r.id,
-        utilizadorId: s.id,
-        detalhes: { site_id, projeto_id, justificacao, valor_estimado: total, estado },
-      });
       for (const i of itens)
         await run(
           `INSERT INTO requisicao_itens (requisicao_id, categoria_id, descricao, quantidade, unidade, preco_unitario, fornecedor_id)
@@ -351,6 +509,9 @@ export async function criarRequisicao(formData) {
           utilizadorId: s.id,
         });
         await notificar(run, await idsPerfil(run, "aprovador"), r.id, "Nova requisição para aprovar");
+        const chefia = await chefiaDe(run, s.id);
+        if (chefia)
+          await notificar(run, [chefia], r.id, `${s.nome} submeteu uma requisição (${total} MZN).`);
       }
       return r.id;
     }, s.id);
@@ -365,6 +526,7 @@ export async function criarRequisicao(formData) {
 export async function adicionarAnexo(formData) {
   const s = await exigir("mestre");
   const id = Number(formData.get("id"));
+  if (!(await limitar(s, "anexar", 60, 60))) redirect(`/requisicoes/${id}?erro=limite`);
   const tipo = String(formData.get("tipo_anexo") || "cotacao");
   const r = await q1("SELECT estado FROM requisicoes WHERE id=$1 AND mestre_id=$2", [id, s.id]);
   if (!r || !["rascunho", "correccao_pedida"].includes(r.estado)) redirect(`/requisicoes/${id}`);
@@ -431,14 +593,14 @@ export async function duplicarRequisicao(formData) {
   if (!orig) redirect(`/requisicoes/${id}`);
   const novo = await tx(async (run) => {
     const [r] = await run(
-      `INSERT INTO requisicoes (mestre_id, site_id, justificacao, urgencia, valor_estimado, estado)
-       SELECT $1, site_id, justificacao, urgencia, valor_estimado, 'rascunho'
+      `INSERT INTO requisicoes (mestre_id, site_id, projeto_id, justificacao, urgencia, valor_estimado, estado)
+       SELECT $1, site_id, projeto_id, justificacao, urgencia, valor_estimado, 'rascunho'
          FROM requisicoes WHERE id = $2 RETURNING id`,
       [s.id, id]
     );
     await run(
-      `INSERT INTO requisicao_itens (requisicao_id, categoria_id, descricao, quantidade, unidade, preco_unitario)
-       SELECT $1, categoria_id, descricao, quantidade, unidade, preco_unitario
+      `INSERT INTO requisicao_itens (requisicao_id, categoria_id, descricao, quantidade, unidade, preco_unitario, fornecedor_id)
+       SELECT $1, categoria_id, descricao, quantidade, unidade, preco_unitario, fornecedor_id
          FROM requisicao_itens WHERE requisicao_id = $2 ORDER BY id`,
       [r.id, id]
     );
@@ -450,9 +612,10 @@ export async function duplicarRequisicao(formData) {
 export async function submeter(formData) {
   const s = await exigir("mestre");
   const id = Number(formData.get("id"));
+  if (!(await limitar(s, "submeter", 30, 60))) redirect(`/requisicoes/${id}?erro=limite`);
   const resultado = await tx(async (run) => {
     const [r] = await run(
-      `SELECT estado, site_id, valor_estimado,
+      `SELECT estado, site_id, projeto_id, valor_estimado,
               (SELECT count(*) FROM requisicao_anexos WHERE requisicao_id=$1)::int AS n
          FROM requisicoes WHERE id=$1 AND mestre_id=$2 FOR UPDATE`,
       [id, s.id]
@@ -482,6 +645,9 @@ export async function submeter(formData) {
       utilizadorId: s.id,
     });
     await notificar(run, await idsPerfil(run, "aprovador"), id, "Requisição submetida para aprovação");
+    const chefia = await chefiaDe(run, s.id);
+    if (chefia)
+      await notificar(run, [chefia], id, `${s.nome} submeteu uma requisição (${r.valor_estimado} MZN).`);
     return "ok";
   }, s.id);
   redirect(resultado === "ok" ? `/requisicoes/${id}` : `/requisicoes/${id}?erro=${resultado}`);
@@ -505,6 +671,7 @@ export async function cancelar(formData) {
 export async function registarCompra(formData) {
   const s = await exigir("mestre");
   const id = Number(formData.get("id"));
+  if (!(await limitar(s, "compra", 60, 60))) redirect(`/requisicoes/${id}?erro=limite`);
   const valor = valorPositivo(formData.get("valor_gasto"));
   const data = String(formData.get("data_compra") || "");
   const tipo = String(formData.get("tipo") || "factura");
@@ -576,8 +743,24 @@ export async function comentar(formData) {
   const s = await exigir();
   const id = Number(formData.get("id"));
   const texto = String(formData.get("texto") || "").trim().slice(0, 2000);
-  if (texto)
-    await q1("INSERT INTO comentarios (requisicao_id, utilizador_id, texto) VALUES ($1,$2,$3)", [id, s.id, texto]);
+  if (!texto) redirect(`/requisicoes/${id}`);
+  if (!(await limitar(s, "comentar", 30, 10))) redirect(`/requisicoes/${id}?erro=limite`);
+
+  await tx(async (run) => {
+    const [r] = await run("SELECT mestre_id, codigo FROM requisicoes WHERE id=$1", [id]);
+    if (!r) return;
+    await run("INSERT INTO comentarios (requisicao_id, utilizador_id, texto) VALUES ($1,$2,$3)", [
+      id,
+      s.id,
+      texto,
+    ]);
+    const decisores = await run("SELECT DISTINCT aprovador_id FROM aprovacoes WHERE requisicao_id=$1", [id]);
+    const chefia = await chefiaDe(run, r.mestre_id);
+    const destinatarios = [r.mestre_id, ...decisores.map((d) => d.aprovador_id), chefia].filter(
+      (x) => x && String(x) !== String(s.id)
+    );
+    await notificar(run, destinatarios, id, `Novo comentário de ${s.nome}: ${texto.slice(0, 160)}`);
+  }, s.id);
   redirect(`/requisicoes/${id}`);
 }
 
@@ -599,16 +782,28 @@ export async function decidir(formData) {
         [id]
       );
       if (!r || r.estado !== "submetido") return "estado";
+      // Delegação activa: decide em nome do aprovador ausente.
+      const [delega] = await run(
+        `SELECT d.de_id FROM delegacoes_aprovacao d
+           JOIN utilizadores u ON u.id=d.de_id
+           JOIN perfis p ON p.id=u.perfil_id
+          WHERE d.para_id=$1 AND d.cancelada_em IS NULL
+            AND now() BETWEEN d.inicio AND d.fim
+            AND p.nome='aprovador' AND u.activo
+          ORDER BY d.fim DESC LIMIT 1`,
+        [s.id]
+      );
+      const emNomeDe = delega ? delega.de_id : s.id;
       const [ja] = await run(
         `SELECT 1 FROM aprovacoes
           WHERE requisicao_id=$1 AND aprovador_id=$2 AND decidido_em > ${desdeSubmissao}`,
-        [id, s.id]
+        [id, emNomeDe]
       );
       if (ja) return "ja";
 
       await run(
-        "INSERT INTO aprovacoes (requisicao_id, aprovador_id, decisao, motivo) VALUES ($1,$2,$3,$4)",
-        [id, s.id, decisao, motivo || null]
+        "INSERT INTO aprovacoes (requisicao_id, aprovador_id, delegado_id, decisao, motivo) VALUES ($1,$2,$3,$4,$5)",
+        [id, emNomeDe, delega ? s.id : null, decisao, motivo || null]
       );
 
       let novo = null;
@@ -638,6 +833,8 @@ export async function decidir(formData) {
         correccao_pedida: `Correcção pedida: ${motivo}`,
       }[novo];
       await notificar(run, [r.mestre_id], id, msg);
+      if (delega)
+        await notificar(run, [delega.de_id], id, `${s.nome} decidiu em seu nome (${decisao}).`);
       if (novo === "aprovado")
         await notificar(run, await idsPerfil(run, "financeiro"), id, "Requisição aprovada: enviar dinheiro");
       return "ok";
@@ -650,6 +847,59 @@ export async function decidir(formData) {
   if (resultado === "estado") redirect(`/requisicoes/${id}?erro=estado`);
   if (resultado === "ja") redirect(`/requisicoes/${id}?erro=ja`);
   redirect(`/requisicoes/${id}`);
+}
+
+/* ---------- Delegação de aprovação ---------- */
+
+export async function delegarAprovacao(formData) {
+  const s = await exigir("aprovador", "admin");
+  const paraId = Number(formData.get("para_id"));
+  const fimRaw = String(formData.get("fim") || "").trim();
+
+  if (!paraId || paraId === Number(s.id)) redirect("/delegacoes?erro=dados");
+  const alvo = await q1(
+    `SELECT u.id FROM utilizadores u JOIN perfis p ON p.id=u.perfil_id
+      WHERE u.id=$1 AND u.activo AND p.nome='aprovador'`,
+    [paraId]
+  );
+  if (!alvo) redirect("/delegacoes?erro=perfil");
+
+  let fim;
+  if (fimRaw) {
+    const d = new Date(`${fimRaw}T23:59:59`);
+    if (Number.isNaN(d.getTime()) || d <= new Date()) redirect("/delegacoes?erro=data");
+    fim = d.toISOString();
+  } else {
+    const d = new Date();
+    d.setDate(d.getDate() + 7);
+    fim = d.toISOString();
+  }
+
+  await tx(async (run) => {
+    await run(
+      `INSERT INTO delegacoes_aprovacao (de_id, para_id, inicio, fim, criado_por)
+       VALUES ($1,$2, now(), $3, $1)`,
+      [s.id, paraId, fim]
+    );
+    await run(
+      "INSERT INTO notificacoes (utilizador_id, canal, mensagem) VALUES ($1,'app',$2)",
+      [paraId, `${s.nome} delegou-lhe a aprovação de requisições até ${new Date(fim).toLocaleDateString("pt-MZ")}.`]
+    );
+  }, s.id);
+  redirect("/delegacoes?ok=delegado");
+}
+
+export async function cancelarDelegacao(formData) {
+  const s = await exigir("aprovador", "admin");
+  const id = Number(formData.get("id"));
+  const d = await q1("SELECT de_id FROM delegacoes_aprovacao WHERE id=$1", [id]);
+  if (!d || (String(d.de_id) !== String(s.id) && s.perfil !== "admin")) redirect("/delegacoes");
+  await tx(
+    (run) =>
+      run("UPDATE delegacoes_aprovacao SET cancelada_em = now() WHERE id=$1 AND cancelada_em IS NULL", [id]),
+    s.id
+  );
+  redirect("/delegacoes?ok=cancelada");
 }
 
 /* ---------- Financeiro ---------- */
@@ -881,11 +1131,13 @@ export async function actualizarUtilizador(formData) {
   const perfil = String(formData.get("perfil"));
   const area = formData.get("area_id") ? Number(formData.get("area_id")) : null;
   const sites = formData.getAll("sites").map(Number).filter(Boolean);
+  const chefia = formData.get("chefia_id") ? Number(formData.get("chefia_id")) : null;
   const activo = formData.get("activo") === "on";
   const senha = String(formData.get("senha") || "");
 
   if (!id || !nome || !telefoneValido(telefone)) redirect(`/admin/utilizadores/${id}?erro=dados`);
   if (senha && errosSenha(senha).length) redirect(`/admin/utilizadores/${id}?erro=senha`);
+  if (chefia === id) redirect(`/admin/utilizadores/${id}?erro=proprio`);
 
   const alvo = await q1(
     `SELECT u.id, u.activo, p.nome AS perfil FROM utilizadores u JOIN perfis p ON p.id=u.perfil_id WHERE u.id=$1`,
@@ -910,11 +1162,11 @@ export async function actualizarUtilizador(formData) {
         `UPDATE utilizadores
             SET nome=$1, telefone=$2, email=$3,
                 perfil_id=(SELECT id FROM perfis WHERE nome=$4), area_id=$5, activo=$6,
-                senha_hash=COALESCE($7, senha_hash),
+                senha_hash=COALESCE($7, senha_hash), chefia_id=$9,
                 deve_mudar_senha = CASE WHEN $7::text IS NOT NULL THEN TRUE ELSE deve_mudar_senha END,
                 sessao_versao = sessao_versao + CASE WHEN $7::text IS NOT NULL OR $6 = FALSE THEN 1 ELSE 0 END
           WHERE id=$8`,
-        [nome, telefone, email, perfil, area, activo, hash, id]
+        [nome, telefone, email, perfil, area, activo, hash, id, chefia]
       );
       await run("DELETE FROM mestre_sites WHERE mestre_id=$1", [id]);
       for (const sid of sites) await run("INSERT INTO mestre_sites (mestre_id, site_id) VALUES ($1,$2)", [id, sid]);
@@ -961,30 +1213,206 @@ export async function alternarUtilizador(formData) {
   redirect("/admin?ok=utilizador");
 }
 
+// Emite um código de uso único para o utilizador repor a senha sozinho.
+// O código só aparece uma vez: o administrador tem de o passar por telefone.
+export async function gerarCodigoRecuperacao(formData) {
+  const s = await exigir("admin");
+  const id = Number(formData.get("id"));
+  const alvo = await q1("SELECT id, activo FROM utilizadores WHERE id=$1", [id]);
+  if (!alvo || !alvo.activo) redirect(`/admin/utilizadores/${id}?erro=dados`);
+
+  const codigo = gerarCodigo();
+  await tx(async (run) => {
+    await run("UPDATE codigos_recuperacao SET usado_em = now() WHERE utilizador_id=$1 AND usado_em IS NULL", [id]);
+    await run(
+      `INSERT INTO codigos_recuperacao (utilizador_id, codigo_hash, expira_em, criado_por)
+       VALUES ($1,$2, now() + ($3 || ' hours')::interval, $4)`,
+      [id, hashCodigo(codigo), String(VALIDADE_HORAS), s.id]
+    );
+  }, s.id);
+  redirect(`/admin/utilizadores/${id}?codigo=${encodeURIComponent(codigo)}`);
+}
+
+// Repõe o segundo factor de alguém que perdeu o telemóvel.
+export async function reporDoisFactores(formData) {
+  const s = await exigir("admin");
+  const id = Number(formData.get("id"));
+  if (!id) redirect("/admin");
+  await tx(
+    (run) => run("UPDATE utilizadores SET totp_ativo=FALSE, totp_secret=NULL WHERE id=$1", [id]),
+    s.id
+  );
+  redirect(`/admin/utilizadores/${id}?ok=2fa`);
+}
+
 export async function criarSite(formData) {
-  await exigir("admin");
+  const s = await exigir("admin");
   const nome = String(formData.get("nome") || "").trim().slice(0, 150);
   const area = Number(formData.get("area_id"));
   if (nome && area)
-    await q1("INSERT INTO sites (nome, provincia, cidade, area_id) VALUES ($1,$2,$3,$4)", [
-      nome,
-      String(formData.get("provincia") || "").slice(0, 80) || null,
-      String(formData.get("cidade") || "").slice(0, 80) || null,
-      area,
-    ]);
+    await tx(
+      (run) =>
+        run("INSERT INTO sites (nome, provincia, cidade, area_id) VALUES ($1,$2,$3,$4)", [
+          nome,
+          String(formData.get("provincia") || "").slice(0, 80) || null,
+          String(formData.get("cidade") || "").slice(0, 80) || null,
+          area,
+        ]),
+      s.id
+    );
+  redirect("/admin?ok=site");
+}
+
+export async function actualizarSite(formData) {
+  const s = await exigir("admin");
+  const id = Number(formData.get("id"));
+  const nome = String(formData.get("nome") || "").trim().slice(0, 150);
+  const area = Number(formData.get("area_id"));
+  const activo = formData.get("activo") === "on";
+  if (!id || !nome || !area) redirect("/admin?erro=dados");
+  await tx(
+    (run) =>
+      run(
+        "UPDATE sites SET nome=$1, provincia=$2, cidade=$3, area_id=$4, activo=$5 WHERE id=$6",
+        [
+          nome,
+          String(formData.get("provincia") || "").trim().slice(0, 80) || null,
+          String(formData.get("cidade") || "").trim().slice(0, 80) || null,
+          area,
+          activo,
+          id,
+        ]
+      ),
+    s.id
+  );
   redirect("/admin?ok=site");
 }
 
 export async function criarFornecedor(formData) {
-  await exigir("admin");
+  const s = await exigir("admin");
   const nome = String(formData.get("nome") || "").trim().slice(0, 150);
   if (!nome) redirect("/admin?erro=dados");
-  await q1("INSERT INTO fornecedores (nome, contacto, nuit) VALUES ($1,$2,$3)", [
-    nome,
-    String(formData.get("contacto") || "").trim().slice(0, 80) || null,
-    String(formData.get("nuit") || "").trim().slice(0, 20) || null,
-  ]);
+  await tx(
+    (run) =>
+      run("INSERT INTO fornecedores (nome, contacto, nuit) VALUES ($1,$2,$3)", [
+        nome,
+        String(formData.get("contacto") || "").trim().slice(0, 80) || null,
+        String(formData.get("nuit") || "").trim().slice(0, 20) || null,
+      ]),
+    s.id
+  );
   redirect("/admin?ok=fornecedor");
+}
+
+export async function actualizarFornecedor(formData) {
+  const s = await exigir("admin");
+  const id = Number(formData.get("id"));
+  const nome = String(formData.get("nome") || "").trim().slice(0, 150);
+  const activo = formData.get("activo") === "on";
+  if (!id || !nome) redirect("/admin?erro=dados");
+  await tx(
+    (run) =>
+      run(
+        "UPDATE fornecedores SET nome=$1, contacto=$2, nuit=$3, activo=$4 WHERE id=$5",
+        [
+          nome,
+          String(formData.get("contacto") || "").trim().slice(0, 80) || null,
+          String(formData.get("nuit") || "").trim().slice(0, 20) || null,
+          activo,
+          id,
+        ]
+      ),
+    s.id
+  );
+  redirect("/admin?ok=fornecedor");
+}
+
+/* ---------- Admin: áreas e categorias ---------- */
+
+export async function criarArea(formData) {
+  const s = await exigir("admin");
+  const nome = String(formData.get("nome") || "").trim().slice(0, 80);
+  if (!nome) redirect("/admin/catalogos?erro=dados");
+  try {
+    await tx((run) => run("INSERT INTO areas (nome) VALUES ($1)", [nome]), s.id);
+  } catch (e) {
+    if (e?.code === "23505") redirect("/admin/catalogos?erro=dup");
+    erroInesperado("Criar área", e);
+    redirect("/admin/catalogos?erro=upload");
+  }
+  redirect("/admin/catalogos?ok=area");
+}
+
+export async function renomearArea(formData) {
+  const s = await exigir("admin");
+  const id = Number(formData.get("id"));
+  const nome = String(formData.get("nome") || "").trim().slice(0, 80);
+  if (!id || !nome) redirect("/admin/catalogos?erro=dados");
+  try {
+    await tx((run) => run("UPDATE areas SET nome=$1 WHERE id=$2", [nome, id]), s.id);
+  } catch (e) {
+    if (e?.code === "23505") redirect("/admin/catalogos?erro=dup");
+    erroInesperado("Renomear área", e, { area: id });
+    redirect("/admin/catalogos?erro=upload");
+  }
+  redirect("/admin/catalogos?ok=area");
+}
+
+export async function apagarArea(formData) {
+  const s = await exigir("admin");
+  const id = Number(formData.get("id"));
+  if (!id) redirect("/admin/catalogos?erro=dados");
+  try {
+    await tx((run) => run("DELETE FROM areas WHERE id=$1", [id]), s.id);
+  } catch (e) {
+    if (e?.code === "23503") redirect("/admin/catalogos?erro=uso");
+    erroInesperado("Apagar área", e, { area: id });
+    redirect("/admin/catalogos?erro=upload");
+  }
+  redirect("/admin/catalogos?ok=area");
+}
+
+export async function criarCategoria(formData) {
+  const s = await exigir("admin");
+  const nome = String(formData.get("nome") || "").trim().slice(0, 100);
+  if (!nome) redirect("/admin/catalogos?erro=dados");
+  try {
+    await tx((run) => run("INSERT INTO categorias (nome) VALUES ($1)", [nome]), s.id);
+  } catch (e) {
+    if (e?.code === "23505") redirect("/admin/catalogos?erro=dup");
+    erroInesperado("Criar categoria", e);
+    redirect("/admin/catalogos?erro=upload");
+  }
+  redirect("/admin/catalogos?ok=categoria");
+}
+
+export async function renomearCategoria(formData) {
+  const s = await exigir("admin");
+  const id = Number(formData.get("id"));
+  const nome = String(formData.get("nome") || "").trim().slice(0, 100);
+  if (!id || !nome) redirect("/admin/catalogos?erro=dados");
+  try {
+    await tx((run) => run("UPDATE categorias SET nome=$1 WHERE id=$2", [nome, id]), s.id);
+  } catch (e) {
+    if (e?.code === "23505") redirect("/admin/catalogos?erro=dup");
+    erroInesperado("Renomear categoria", e, { categoria: id });
+    redirect("/admin/catalogos?erro=upload");
+  }
+  redirect("/admin/catalogos?ok=categoria");
+}
+
+export async function apagarCategoria(formData) {
+  const s = await exigir("admin");
+  const id = Number(formData.get("id"));
+  if (!id) redirect("/admin/catalogos?erro=dados");
+  try {
+    await tx((run) => run("DELETE FROM categorias WHERE id=$1", [id]), s.id);
+  } catch (e) {
+    if (e?.code === "23503") redirect("/admin/catalogos?erro=uso");
+    erroInesperado("Apagar categoria", e, { categoria: id });
+    redirect("/admin/catalogos?erro=upload");
+  }
+  redirect("/admin/catalogos?ok=categoria");
 }
 
 export async function marcarNotificacoesLidas() {

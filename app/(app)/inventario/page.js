@@ -1,6 +1,7 @@
 import { exigir } from "@/lib/auth";
 import { q } from "@/lib/db";
-import { estadoStock, rotuloStock } from "@/lib/stock";
+import { rotuloStock } from "@/lib/stock";
+import { dadosInventario } from "@/lib/inventario";
 import { criarItemStock, registarMovimentoStock } from "@/app/actions";
 import Btn from "@/components/Btn";
 
@@ -28,46 +29,8 @@ const podeGerir = (perfil) => ["mestre", "financeiro", "admin"].includes(perfil)
 export default async function Inventario({ searchParams }) {
   const s = await exigir();
 
-  let sites;
-  if (s.perfil === "mestre")
-    sites = await q(
-      `SELECT st.id, st.nome FROM sites st WHERE st.activo
-        AND (EXISTS (SELECT 1 FROM mestre_sites ms WHERE ms.mestre_id=$1 AND ms.site_id=st.id)
-             OR NOT EXISTS (SELECT 1 FROM mestre_sites WHERE mestre_id=$1))
-        ORDER BY st.nome`,
-      [s.id]
-    );
-  else if (s.perfil === "aprovador" && s.area_id)
-    sites = await q("SELECT id, nome FROM sites WHERE activo AND area_id=$1 ORDER BY nome", [s.area_id]);
-  else sites = await q("SELECT id, nome FROM sites WHERE activo ORDER BY nome");
-
-  const siteIds = sites.map((x) => Number(x.id));
+  const { sites, siteIds, itens, filtroSite, procura, soBaixo } = await dadosInventario(s, searchParams);
   const categorias = await q("SELECT id, nome FROM categorias ORDER BY nome");
-  const filtroSite = searchParams.site && siteIds.includes(Number(searchParams.site)) ? Number(searchParams.site) : null;
-  const procura = String(searchParams.q || "").trim().slice(0, 100);
-  const soBaixo = searchParams.baixo === "1";
-
-  const params = [siteIds];
-  const where = ["i.activo", "i.site_id = ANY($1::bigint[])"];
-  if (filtroSite) {
-    params.push(filtroSite);
-    where.push(`i.site_id = $${params.length}`);
-  }
-  if (procura) {
-    params.push(`%${procura}%`);
-    where.push(`i.descricao ILIKE $${params.length}`);
-  }
-  if (soBaixo) where.push("i.quantidade <= i.quantidade_minima AND i.quantidade_minima > 0");
-
-  const itens = await q(
-    `SELECT i.*, s.nome AS site, c.nome AS categoria
-       FROM inventario i
-       JOIN sites s ON s.id = i.site_id
-       LEFT JOIN categorias c ON c.id = i.categoria_id
-      WHERE ${where.join(" AND ")}
-      ORDER BY s.nome, i.descricao`,
-    params
-  );
 
   const movimentos = await q(
     `SELECT m.*, i.descricao, s.nome AS site, u.nome AS utilizador, r.codigo
@@ -82,7 +45,7 @@ export default async function Inventario({ searchParams }) {
     [siteIds]
   );
 
-  const baixos = itens.filter((i) => estadoStock(i.quantidade, i.quantidade_minima) !== "ok").length;
+  const baixos = itens.filter((i) => i.estado !== "ok").length;
   const gerir = podeGerir(s.perfil);
   const linkFiltro = (mudancas) => {
     const sp = new URLSearchParams();
@@ -91,12 +54,18 @@ export default async function Inventario({ searchParams }) {
     const qs = sp.toString();
     return `/inventario${qs ? `?${qs}` : ""}`;
   };
+  const exportar = new URLSearchParams();
+  if (filtroSite) exportar.set("site", filtroSite);
+  if (procura) exportar.set("q", procura);
+  if (soBaixo) exportar.set("baixo", "1");
+  const hrefExportar = `/api/inventario/csv${exportar.toString() ? `?${exportar}` : ""}`;
 
   return (
     <>
       <div className="linha">
         <h1>Inventário</h1>
         <div className="acoes">
+          <a href={hrefExportar} className="btn sec">Exportar CSV</a>
           <a href={linkFiltro({ baixo: soBaixo ? "" : "1" })} className={`btn ${soBaixo ? "pri" : "sec"}`}>
             {soBaixo ? "Ver todos" : `Abaixo do mínimo${baixos ? ` (${baixos})` : ""}`}
           </a>
@@ -126,19 +95,16 @@ export default async function Inventario({ searchParams }) {
           </thead>
           <tbody>
             {itens.length === 0 && <tr><td colSpan="6" className="mut">Ainda sem material registado.</td></tr>}
-            {itens.map((i) => {
-              const estado = estadoStock(i.quantidade, i.quantidade_minima);
-              return (
-                <tr key={i.id}>
-                  <td>{i.descricao}</td>
-                  <td>{i.site}</td>
-                  <td>{i.categoria || "—"}</td>
-                  <td><b>{Number(i.quantidade)}</b> {i.unidade}</td>
-                  <td>{Number(i.quantidade_minima)}</td>
-                  <td><span className={`stock ${estado}`}>{rotuloStock(estado)}</span></td>
-                </tr>
-              );
-            })}
+            {itens.map((i) => (
+              <tr key={i.id}>
+                <td>{i.descricao}</td>
+                <td>{i.site}</td>
+                <td>{i.categoria || "—"}</td>
+                <td><b>{Number(i.quantidade)}</b> {i.unidade}</td>
+                <td>{Number(i.quantidade_minima)}</td>
+                <td><span className={`stock ${i.estado}`}>{rotuloStock(i.estado)}</span></td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>

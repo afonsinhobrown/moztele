@@ -29,7 +29,14 @@ export default async function Lista({ searchParams }) {
     where.push(sql.replaceAll("?", `$${params.length}`));
   };
 
-  if (s.perfil === "mestre") add("r.mestre_id=?", s.id);
+  if (s.perfil === "mestre") {
+    // As suas, mais as de quem chefia.
+    params.push(s.id, s.id);
+    where.push(
+      `(r.mestre_id = $${params.length - 1}
+        OR EXISTS (SELECT 1 FROM utilizadores uc WHERE uc.id = r.mestre_id AND uc.chefia_id = $${params.length}))`
+    );
+  }
   if (s.perfil === "aprovador" && s.area_id) add("st.area_id=?", s.area_id);
   if (filtro) add("r.estado=?", filtro);
   if (pedido.q) add("(r.codigo ILIKE ? OR r.justificacao ILIKE ? OR u.nome ILIKE ?)", `%${pedido.q}%`);

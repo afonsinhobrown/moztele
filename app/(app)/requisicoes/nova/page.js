@@ -15,6 +15,7 @@ const ERROS = {
   upload: "Não foi possível carregar o ficheiro. Verifique o tamanho (máx. 4 MB) e tente novamente.",
   tamanho: "O ficheiro tem mais de 4 MB. Reduza a foto ou o PDF e tente outra vez.",
   tipo: "Só são aceites ficheiros PDF, JPG ou PNG.",
+  limite: "Criou demasiadas requisições na última hora. Aguarde um pouco e tente outra vez.",
 };
 
 export default async function Nova({ searchParams }) {
