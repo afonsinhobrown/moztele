@@ -70,6 +70,15 @@ O sistema existe para uma coisa: **o dinheiro tem prova em cada passo** — e qu
 - Comentários novos avisam o mestre, os aprovadores que já decidiram e a chefia do mestre.
 - Requisições paradas: `npm run alertas` (agende na Vercel com um Cron Job, por exemplo uma vez por dia).
 
+## Painel (próximas acções)
+
+- Depois de entrar, cada pessoa cai em `/inicio`, com o que **precisa de fazer agora** — não numa lista para procurar.
+- **Mestre**: criar nova requisição, corrigir o que foi devolvido, registar a compra, dar entrada no stock; vê também o saldo abatido disponível e as requisições de quem chefia.
+- **Aprovador**: a fila da sua área que ainda não votou (incluindo por delegação).
+- **Financeiro**: enviar dinheiro, confirmar cobertura por saldo, fazer o acerto e reembolsar excessos.
+- **Administração**: o que está a aguardar aprovação, por acertar, contas de teste activas e as últimas alterações de auditoria.
+- A ordem é por prioridade e, dentro dela, pelo que está parado há mais tempo (ver `lib/painelAcoes.js`).
+
 ## Inventário
 
 - Cada site tem o seu inventário (`/inventario`): material, unidade, quantidade e mínimo.

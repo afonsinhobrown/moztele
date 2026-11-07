@@ -10,11 +10,12 @@ export default async function AppLayout({ children }) {
   return (
     <>
       <header className="topo">
-        <Link href="/requisicoes" className="logo">
+        <Link href="/inicio" className="logo">
           Moz Teles
         </Link>
         {!bloqueado && (
           <nav>
+            <Link href="/inicio">Início</Link>
             <Link href="/requisicoes">Requisições</Link>
             {s.perfil === "mestre" && <Link href="/requisicoes/nova">Nova</Link>}
             {s.perfil === "mestre" && <Link href="/modelos">Modelos</Link>}

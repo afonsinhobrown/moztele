@@ -54,7 +54,7 @@ export default async function Inicio() {
   } catch {
     s = null;
   }
-  const destino = s ? (s.mudar ? "/conta/senha" : "/requisicoes") : "/login";
+  const destino = s ? (s.mudar ? "/conta/senha" : "/inicio") : "/login";
 
   return (
     <div className="site">

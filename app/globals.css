@@ -181,3 +181,21 @@ details>summary{cursor:pointer}
 /* Checkbox em linha */
 label.chek{display:inline-flex;align-items:center;gap:6px;margin:0;font-weight:600;font-size:13px;color:#46586c;white-space:nowrap}
 
+
+/* Painel: proximas accoes */
+.painel-cta{display:flex;justify-content:space-between;align-items:center;gap:18px;flex-wrap:wrap;background:linear-gradient(150deg,#0f3d6e,#1a5a95);color:#fff;border-radius:16px;padding:20px 24px;margin:6px 0 14px}
+.painel-cta h2{color:#fff;font-size:19px;margin:0 0 4px;letter-spacing:-.2px}
+.painel-cta p{color:#d7e6f5;margin:0}
+.painel-cta .btn.pri{background:#fff;color:#0f3d6e;border-color:#fff}
+.chip-resumo{display:inline-flex;gap:6px;align-items:center;background:#fff;border:1px solid #e6ecf3;border-radius:999px;padding:6px 14px;font-size:13px;color:#46586c}
+.chip-resumo b{color:#0f3d6e;font-size:15px}
+.chip-resumo.atencao{background:#fff4d6;border-color:#f0dfae;color:#8a5a00}
+.acoes-lista{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:14px;margin:10px 0 18px}
+.acao-card{background:#fff;border:1px solid #e6ecf3;border-radius:14px;padding:16px;display:flex;flex-direction:column;gap:8px;box-shadow:0 8px 24px rgba(15,47,82,.04)}
+.acao-topo{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.acao-codigo{font-weight:800;color:#0f3d6e;font-size:13.5px;letter-spacing:.2px}
+.acao-card h3{margin:2px 0 0;font-size:16px;color:#16202b}
+.acao-card p{margin:0;color:#46586c;font-size:13px;line-height:1.35}
+.acao-rodape{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:auto;padding-top:6px;flex-wrap:wrap}
+.vazio{display:flex;flex-direction:column;align-items:flex-start;gap:12px}
+@media(max-width:700px){.painel-cta{flex-direction:column;align-items:flex-start}}

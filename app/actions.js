@@ -1,4 +1,4 @@
-"use server";
+﻿"use server";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import bcrypt from "bcryptjs";
@@ -250,7 +250,7 @@ export async function login(formData) {
   await criarSessao(u);
   if (u.deve_mudar_senha) redirect("/conta/senha");
   const destino = String(formData.get("de") || "");
-  redirect(destino.startsWith("/") && !destino.startsWith("//") ? destino : "/requisicoes");
+  redirect(destino.startsWith("/") && !destino.startsWith("//") ? destino : "/inicio");
 }
 
 export async function logout() {
@@ -283,7 +283,7 @@ export async function verificar2fa(formData) {
   await q1("UPDATE utilizadores SET ultimo_acesso = now(), falhas_login = 0 WHERE id = $1", [u.id]);
   await criarSessao(u);
   if (u.deve_mudar_senha) redirect("/conta/senha");
-  redirect("/requisicoes");
+  redirect("/inicio");
 }
 
 export async function mudarSenha(formData) {
@@ -316,7 +316,7 @@ export async function mudarSenha(formData) {
     [s.id]
   );
   await criarSessao(novo);
-  redirect("/requisicoes?ok=senha");
+  redirect("/inicio?ok=senha");
 }
 
 /* ---------- Segundo factor ---------- */
