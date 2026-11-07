@@ -1,4 +1,6 @@
 /** @type {import('next').NextConfig} */
+const desenvolvimento = process.env.NODE_ENV !== "production";
+
 const nextConfig = {
   swcMinify: false,
   experimental: {
@@ -24,7 +26,8 @@ const nextConfig = {
             key: "Content-Security-Policy",
             value: [
               "default-src 'self'",
-              "script-src 'self' 'unsafe-inline'",
+              // Em desenvolvimento o React precisa de eval para o Fast Refresh.
+              `script-src 'self' 'unsafe-inline'${desenvolvimento ? " 'unsafe-eval'" : ""}`,
               "style-src 'self' 'unsafe-inline'",
               "img-src 'self' data: blob:",
               "font-src 'self' data:",
